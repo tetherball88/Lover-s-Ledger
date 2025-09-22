@@ -45,5 +45,11 @@ EndFunction
 
 Function OStimEnd(string EventName, string StrArg, float ThreadID, Form Sender)
     TTLL_OstimINtegration.OStimEnd(ThreadID as int)
+
+    RegisterForSingleUpdate(3)
 EndFunction
+
+Event OnUpdate()
+    TTLL_OstimThreadsCollector.CleanFinishedThreads()
+EndEvent
 

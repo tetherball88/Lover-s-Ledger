@@ -16,6 +16,7 @@ Function OStimManager(string EventName, string StrArg, float ThreadID, Form Send
 EndFunction
 
 Function OStimStart(int ThreadID) global
+    TTLL_OstimThreadsCollector.CleanThread(ThreadID)
 EndFunction
 
 Function OStimSceneChanged(int ThreadID) global
@@ -57,15 +58,16 @@ Function OStimOrgasm(int ThreadID, Actor npc) global
         EndWhile
     endif
 
-    TTLL_OstimThreadsCollector.ExcitementContributorOrgasm(ThreadID as int, npc)
+    TTLL_OstimThreadsCollector.SetOrgasmed(ThreadID, npc)
+
+    TTLL_OstimThreadsCollector.ExcitementContributorOrgasm(ThreadID, npc)
 EndFunction
 
 Function OStimEnd(int ThreadID) global
     if(TTLL_OstimThreadsCollector.GetHadSex(ThreadID))
         UpdateOnOStimEnd(ThreadID)
-
-        TTLL_OstimThreadsCollector.CleanThread(ThreadID)
     endif
+    TTLL_OstimThreadsCollector.SetFinished(ThreadID, 1)
 EndFunction
 
 Function GetActions(int ThreadID, Actor npc) global
@@ -76,6 +78,7 @@ Function GetActions(int ThreadID, Actor npc) global
 
     if(actionsByActor.Length > 0)
         TTLL_OstimThreadsCollector.SetHadSex(ThreadID)
+        TTLL_OstimThreadsCollector.SetLastSexualSceneId(ThreadID, OThread.GetScene(ThreadID))
     endif 
 
     int i = 0
@@ -145,6 +148,8 @@ Function UpdateOnOStimEnd(int ThreadID) global
         
         npc = JFormMap_nextKey(JActors, previousKey=npc, endKey=none) as Actor
     endwhile
+
+    TTLL_Utils.SendThreadDataEvent(ThreadID)
 EndFunction
 
 ;/**

@@ -121,3 +121,12 @@ To integrate Sexlab functionality:
 1. Install required dependencies
 2. Install TT Lover's Ledger using your preferred mod manager
 3. Load after OStim/Sexlab in your load order
+
+## Changelog
+
+v0.0.2
+- Added event `ttll_thread_data_event` firing after OstimEnd and before Thread will be cleaned
+- track boolean `orgasmed` on each thread
+- added new thread property `finished` to check if thread was already finished so it can be cleaned after 3 seconds after finish or on start thread with same ThreadID
+v0.0.1: 
+- initial release

@@ -2,8 +2,6 @@ scriptname TTLL_Utils
 
 import TTLL_JCDomain
 
-
-
 ;/**
   * Joins the keys of a JMap object into a string with a separator.
   * @param {int} JObj - The JMap object.
@@ -24,11 +22,11 @@ string Function JoinJMapKeys(int JObj, string separator = ", ") global
 EndFunction
 
 string Function GetActorName(actor akActor) global
-  if akActor == TTLL_Store.GetPlayerRef()
-    return akActor.GetActorBase().GetName()
-  else
-    return akActor.GetDisplayName()
-  EndIf
+    if akActor == TTLL_Store.GetPlayerRef()
+        return akActor.GetActorBase().GetName()
+    else
+        return akActor.GetDisplayName()
+    EndIf
 EndFunction
 
 ;/**
@@ -37,13 +35,13 @@ EndFunction
   * @returns {string} - The encounter type ("solo", "couple", or "group").
 */;
 string Function GetEcnounterType(int participants) global
-  if(participants == 1)
-      return "solo"
-  elseif(participants == 2)
-      return "couple"
-  endif
-      
-  return "group"
+    if(participants == 1)
+        return "solo"
+    elseif(participants == 2)
+        return "couple"
+    endif
+        
+    return "group"
 EndFunction
 
 Function SendUpdateLoverDataEvent(Actor npc, Actor lover) global
@@ -51,6 +49,15 @@ Function SendUpdateLoverDataEvent(Actor npc, Actor lover) global
     if(handler)
         ModEvent.PushForm(handler, npc as Form)
         ModEvent.PushForm(handler, lover as Form)
+        ModEvent.Send(handler)
+        Utility.Wait(0.1)
+    endif
+EndFunction
+
+Function SendThreadDataEvent(int ThreadID) global
+    int handler = ModEvent.Create("ttll_thread_data_event")
+    if(handler)
+        ModEvent.PushInt(handler, ThreadID)
         ModEvent.Send(handler)
         Utility.Wait(0.1)
     endif

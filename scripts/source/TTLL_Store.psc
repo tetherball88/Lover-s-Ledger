@@ -520,6 +520,11 @@ int Function GetLoverObject(Actor npc, Actor lover, bool createIfEmpty = true) g
     return JLover
 EndFunction
 
+Actor Function NextLover(Actor npc, Actor lover = none) global
+    Actor nextLover = JFormMap_nextKey(GetNpcLovers(npc), lover) as Actor
+    return nextLover
+EndFunction
+
 ; Get/Set lover basic properties
 string Function GetLoverName(Actor npc, Actor lover) global
     return JMap_getStr(GetLoverObject(npc, lover), "name")

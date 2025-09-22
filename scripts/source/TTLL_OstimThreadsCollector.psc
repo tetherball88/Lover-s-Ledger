@@ -9,6 +9,7 @@ boolean - represented by 1(true) and 0(false)
   "TT_LoversLedger": {
     "threadsCollector": {
       [ThreadID]: { // dynamic key depends on which ostim thread 
+        "finished": boolean
         "hadSex": boolean;
         "prevExcitementStarted": float;
         "actors": { // list of actors who participated in thread
@@ -19,10 +20,12 @@ boolean - represented by 1(true) and 0(false)
             "got": { // object which tracks actions current actor received as target actor at least once during thread
               action1: boolean;
             }
+            "orgasmed": 1|0
             "excitementContribution": { contributors: { [Actor]: { rate: float, total: float, orgasms: float } } }
             "hadSameSexEncounter": boolean;
           }
         }
+        "lastSexualSceneId": string
       }
     }
   }
@@ -78,6 +81,12 @@ EndFunction
 int Function GetActors(int ThreadID) global
     int JThread = GetThread(ThreadID)
     return JMap_getObj(JThread, "actors")
+EndFunction
+
+Form[] Function GetActorsForms(int ThreadID) global
+    int JActors = GetActors(ThreadID)
+
+    return JFormMap_allKeysPArray(JActors)
 EndFunction
 
 ;/**
@@ -196,7 +205,7 @@ EndFunction
 * @param {int} ThreadID - The ID of the thread.
 * @param {actor} npc - The NPC actor.
 /;
-Function SetOrgasmed(int ThreadID, actor npc)
+Function SetOrgasmed(int ThreadID, actor npc) global
     SetSimpleBool(ThreadID, npc, "orgasmed")
 EndFunction 
 
@@ -206,7 +215,7 @@ EndFunction
 * @param {actor} npc - The NPC actor.
 * @returns {bool} - True if the actor has orgasmed, otherwise false.
 /;
-bool Function GetOrgasmed(int ThreadID, actor npc)
+bool Function GetOrgasmed(int ThreadID, actor npc) global
     return GetSimpleBool(ThreadID, npc, "orgasmed")
 EndFunction 
 
@@ -251,6 +260,19 @@ Function CleanThread(int ThreadID) global
     JMap_setObj(JThreadsCollection, ThreadID + "", 0)
 EndFunction
 
+Function CleanFinishedThreads() global
+    int JCollector = GetThreadsCollector()
+
+    string nextThread = JMap_nextKey(JCollector)
+
+    while(nextThread)
+        if(GetFinished(nextThread as int))
+            CleanThread(nextThread as int)
+        endif
+        nextThread = JMap_nextKey(JCollector, nextThread)
+    endwhile
+EndFunction
+
 Function SetHadSex(int ThreadID) global
     int JThread = GetThread(ThreadID)
 
@@ -261,6 +283,30 @@ bool Function GetHadSex(int ThreadID) global
     int JThread = GetThread(ThreadID)
 
     return JMap_getInt(JThread, "hadSex") == 1
+EndFunction
+
+Function SetFinished(int ThreadID, int value) global
+    int JThread = GetThread(ThreadID)
+
+    JMap_setInt(JThread, "finished", value)
+EndFunction
+
+bool Function GetFinished(int ThreadID) global
+    int JThread = GetThread(ThreadID)
+
+    return JMap_getInt(JThread, "finished") == 1
+EndFunction
+
+Function SetLastSexualSceneId(int ThreadID, string sceneId) global
+    int JThread = GetThread(ThreadID)
+
+    JMap_setStr(JThread, "lastSexualSceneId", sceneId)
+EndFunction
+
+string Function GetLastSexualSceneId(int ThreadID) global
+    int JThread = GetThread(ThreadID)
+
+    return JMap_getStr(JThread, "lastSexualSceneId")
 EndFunction
 
 ;/**
