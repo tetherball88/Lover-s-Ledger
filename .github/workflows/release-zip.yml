@@ -1,0 +1,41 @@
+name: Release (selective zip)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create/upload releases
+
+jobs:
+  make-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # --- build/prepare your artifacts here if needed ---
+      # e.g., npm ci && npm run build, or make, etc.
+
+      - name: Create selective zip
+        run: |
+          mkdir -p out
+          # Include ONLY these paths/files; add/remove as you like.
+          zip -r out/Lover's Ledger ${{ github.event.release.tag_name }}.zip \
+            docs/ \
+            scripts/ \
+            SKSE/ \
+            TT_LoversLedger.esp \
+            -x ".github/*"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: "Automated release for ${{ github.ref_name }}"
+          files: |
+            out/Lover's Ledger.zip
