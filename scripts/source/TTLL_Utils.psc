@@ -34,7 +34,7 @@ EndFunction
   * @param {int} participants - The number of participants in the encounter.
   * @returns {string} - The encounter type ("solo", "couple", or "group").
 */;
-string Function GetEcnounterType(int participants) global
+string Function GetEncounterType(int participants) global
     if(participants == 1)
         return "solo"
     elseif(participants == 2)

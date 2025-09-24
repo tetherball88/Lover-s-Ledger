@@ -111,7 +111,7 @@ Function UpdateOnOStimEnd(int ThreadID) global
     int JActors = TTLL_OstimThreadsCollector.GetActors(ThreadID)
     int actorsCount = JFormMap_count(JActors)
 
-    string encounterType = TTLL_Utils.GetEcnounterType(actorsCount)
+    string encounterType = TTLL_Utils.GetEncounterType(actorsCount)
 
     CountThreadActions(ThreadID)
 

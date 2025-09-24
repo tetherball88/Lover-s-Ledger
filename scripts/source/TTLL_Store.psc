@@ -71,7 +71,7 @@ EndFunction
 
 ; Clear the main tracking object
 Function Clear() global
-    JDB_solveObjSetter(GetNamespaceKey(), 0)
+    JDB_solveObjSetter(GetNamespaceKey(), JMap_object())
     ImportInitialData()
 EndFunction
 
@@ -87,11 +87,23 @@ EndFunction
 */;
 Function ImportData() global
     int JObj = JValue_readFromFile(JContainers.userDirectory() + "LoversLedger/store.json")
-    JDB_solveObjSetter(GetNamespaceKey(), JObj)
+    if(JObj == 0)
+        JObj = JMap_object()
+    endif
+    JDB_solveObjSetter(GetNamespaceKey(), JObj, true)
+    ImportInitialData()
 EndFunction
 
 Function ImportInitialData() global
-    JDB_solveObjSetter(GetNamespaceKey() + ".initialData", JValue_readFromFile("Data/SKSE/Plugins/LoversLedger/initialData.json"), true)
+    int JRoot = JDB_solveObj(GetNamespaceKey())
+    if(JRoot == 0)
+        JDB_solveObjSetter(GetNamespaceKey(), JMap_object())
+    endif
+    int jInitialObject = JValue_readFromFile("Data/SKSE/Plugins/LoversLedger/initialData.json")
+    if(jInitialObject == 0)
+        TTLL_Debug.err("Couldn't load data from 'Data/SKSE/Plugins/LoversLedger/initialData.json'")
+    endif
+    JDB_solveObjSetter(GetNamespaceKey() + ".initialData", jInitialObject, true)
 EndFunction
 
 int Function GetRoot() global
@@ -441,7 +453,7 @@ int Function CreateExistingJLoverByActor(Actor npc, Actor lover, bool isSpouse, 
     int JLover = JMap_object()
     ActorBase loverAB = lover.GetActorBase()
     int sexTimes = 0
-    float lastTime = Utility.GetCurrentGameTime() as int
+    float lastTime = Utility.GetCurrentGameTime()
     int didInternal = 0
     int gotInternal = 0
     int sex = loverAB.GetSex()
@@ -625,7 +637,7 @@ EndFunction
 */;
 Function UpdateLover(Actor npc, Actor lover, int participants, float orgasms) global
     int JLover = GetLoverObject(npc, lover)
-    string encounterType = TTLL_Utils.GetEcnounterType(participants)
+    string encounterType = TTLL_Utils.GetEncounterType(participants)
 
     if(encounterType == "couple")
         IncrementLoverExclusiveSexCount(npc, lover)

@@ -17,19 +17,63 @@ jobs:
         with:
           fetch-depth: 0
 
-      # --- build/prepare your artifacts here if needed ---
-      # e.g., npm ci && npm run build, or make, etc.
-
       - name: Create selective zip
+        id: pack
         run: |
+          set -euo pipefail
+          echo "Trigger ref: ${GITHUB_REF}"
+          echo "Tag name (version): ${GITHUB_REF_NAME}"
+
+          VERSION="${GITHUB_REF_NAME}"
+          ZIP_PATH="out/Lovers-Ledger-${VERSION}.zip"
+
+          echo "::group::Prepare output directory"
           mkdir -p out
-          # Include ONLY these paths/files; add/remove as you like.
-          zip -r out/Lover's Ledger ${{ github.event.release.tag_name }}.zip \
+          echo "Output directory ready: out/"
+          echo "::endgroup::"
+
+          echo "::group::Planned contents"
+          echo "Including:"
+          printf -- "  - %s\n" "docs/" "scripts/" "SKSE/" "TT_LoversLedger.esp"
+          echo "Excluding:"
+          printf -- "  - %s\n" ".github/*"
+          echo "::endgroup::"
+
+          echo "::group::Preview file tree"
+          # Show a concise tree if available; fallback to find if tree isn't installed
+          if command -v tree >/dev/null 2>&1; then
+            tree -a -I ".git|out" -L 2
+          else
+            find . -maxdepth 2 -not -path "./.git*" -not -path "./out*" -print
+          fi
+          echo "::endgroup::"
+
+          echo "::group::Create ZIP"
+          echo "Creating zip at: ${ZIP_PATH}"
+          zip -r "$ZIP_PATH" \
             docs/ \
             scripts/ \
             SKSE/ \
             TT_LoversLedger.esp \
             -x ".github/*"
+          echo "::endgroup::"
+
+          echo "::group::ZIP details"
+          ls -lh "$ZIP_PATH" || true
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "SHA256:"
+            sha256sum "$ZIP_PATH"
+          fi
+          echo "::endgroup::"
+
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+
+          # Also add a short summary to the job summary UI
+          {
+            echo "## Artifact created"
+            echo "- **Tag:** ${VERSION}"
+            echo "- **File:** \`${ZIP_PATH}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -37,5 +81,4 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           body: "Automated release for ${{ github.ref_name }}"
-          files: |
-            out/Lover's Ledger.zip
+          files: ${{ steps.pack.outputs.zip_path }}
