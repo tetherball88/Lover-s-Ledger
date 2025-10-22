@@ -22,6 +22,8 @@ Function Maintenance()
     if slf != none
         TTLL_SexlabIntegration.Maintenance(self, slf)
     endif
+
+    TTLL_Store.SetHasTTRF(Game.GetModByName("TT_RelationsFinder.esp") != 255)
 EndFunction
 
 Function OstimSetup()

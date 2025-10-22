@@ -114,6 +114,18 @@ Actor Function GetPlayerRef() global
     return JDB_solveForm(GetNamespaceKey() + ".initialData.playerRef") as Actor
 EndFunction
 
+Function SetHasTTRF(bool hasTTRF) global
+    int val = 0
+    if(hasTTRF)
+        val = 1
+    endif
+    JDB_solveIntSetter(GetNamespaceKey() + ".hasTTRF", val, true)
+EndFunction
+
+bool Function GetHasTTRF() global
+    int hasTTRF = JDB_solveInt(GetNamespaceKey() + ".hasTTRF", 0)
+    return hasTTRF == 1
+EndFunction
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; NPC Management
@@ -165,7 +177,7 @@ int Function GetNpc(Actor npc, bool createIfEmpty = true) global
         JMap_setObj(JNpcObj, "topThreeLovers", JFormMap_object())
 
         ; find for npc any existing relationships it should be done once per new npc
-        if(npc != GetPlayerRef())
+        if(npc != GetPlayerRef() && GetHasTTRF())
             Actor spouse = TTRF_Store.GetSpouse(npc)
             Actor courting = TTRF_Store.GetCourting(npc)
             bool isLover = npc.GetRelationshipRank(spouse) == 4
