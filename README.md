@@ -1,132 +1,108 @@
-# TT Lover's Ledger
+## TT Lover's Ledger
 
-A Skyrim mod that tracks and analyzes adult framework interactions to provide detailed relationship statistics and history for NPCs and the player.
+A lightweight SKSE plugin + Papyrus library that records adult-framework (OStim and basic SexLab) activity and exposes a programmatic ledger of relationship and encounter statistics.
 
-## Overview
+This README is a concise reference for what the mod actually implements, how to use it from Papyrus, and what it tracks.
 
-TT Lover's Ledger is a utility mod that tracks adult framework interactions (OStim/Sexlab scenes) in your game, gathering comprehensive statistics that can be used by other mods. It tracks all interactions, whether the player is involved or not, maintaining detailed records of who did what with whom.
+## What this mod implements
 
-## Features
+- Runtime thread collector for OStim scenes (non-persistent): `ThreadsCollector`
+    - Tracks per-thread actors, actions (did/got), orgasms, and excitement contribution data
+    - Exposes getters/setters to Papyrus to read/write per-thread and per-actor properties
+    - Provides ApplyThreadToLedger() to convert a finished thread into persistent ledger updates
 
-### Comprehensive Scene Tracking
-- Records all adult framework scenes and participants
-- Tracks specific actions performed and received by each actor
-- Maintains detailed statistics regardless of player involvement
+- Persistent ledger service: `LoversLedgerService`
+    - Stores per-NPC statistics and per-lover relationship data in memory and persists via SKSE serialization
+    - Tracks: exclusive/group/solo counts, same-sex encounters, last encounter time, total internal climax (did/got)
+    - Tracks action counts (actions_did / actions_got) keyed by normalized action name
+    - Maintains lover entries with: exclusiveSex, partOfSameGroupSex, lastTime, orgasms, internalClimax
 
-### Actor Statistics
-For each actor (NPC or player), the mod tracks:
-- Participation in OStim/Sexlab scenes
-- Action counts (performed and received)
-- Top 3 most frequent actions (both performed and received)
-- Encounter types:
-  - Solo interactions
-  - Exclusive (one partner) encounters
-  - Group encounters
-  - Same-sex encounters
-- Timestamp of last encounter
+- Papyrus bindings
+    - `TTLL_Store` (core API): get/set generic properties, record actions, query lovers/actions/score
+    - `TTLL_ThreadsCollector` (runtime API): thread lifecycle, actor properties, excitement contributions
+    - `TTLL_MainController`, `TTLL_OstimIntegration`: Papyrus-side glue that listens for OStim events and applies thread data to the ledger
 
-### Lover Relationships
-For each actor's lovers, the mod maintains:
-- Complete interaction history
-- Exclusive and group encounter counts
-- Last encounter timestamp
-- Orgasm participation statistics
-- Internal climax tracking (given and received)
+- RelationsFinder integration
+    - If `RelationsFinder.dll` is present, the plugin will query it on data load and scan existing spouse/courting/lover relationships to generate seed data for the ledger
 
-### Top 3 Lovers System
-Tracks each actor's top three lovers using a sophisticated scoring system that considers:
-- Recency of encounters (time decay factor)
-- Number of exclusive encounters
-- Group encounter participation
-- Orgasm contribution
+- SKSE Serialization
+    - Ledger data is saved/loaded using SKSE serialization (unique ID: 'LLGR', versioned)
+    - Serialization logs failures and attempts to skip/continue on invalid entries for robustness
 
-#### Lover Score Formula
-```
-Final Score = Time Multiplier × (√(exclusive_encounters) × 6.0 + √(group_encounters) × 2.0 + √(orgasms) × 5.0)
-```
+## Papyrus API (short reference)
 
-Time Multiplier Values:
-- 1.0: Less than a week
-- 0.8: More than 1 week
-- 0.6: More than 1 month
-- 0.3: More than 6 months
-- 0.1: Within a year
-- 0.05: Over a year
+**TTLL_Store** (global functions registered in Papyrus)
+  - GetNpcInt(Actor npc, String propName) -> Int
+  - GetNpcFlt(Actor npc, String propName) -> Float
+  - GetLoverInt(Actor npc, Actor lover, String propName) -> Int
+  - GetLoverFlt(Actor npc, Actor lover, String propName) -> Float
+  - SetNpcInt(Actor npc, String propName, Int value)
+  - SetNpcFlt(Actor npc, String propName, Float value)
+  - SetLoverInt(Actor npc, Actor lover, String propName, Int value)
+  - SetLoverFlt(Actor npc, Actor lover, String propName, Float value)
+  - RecordAction(Actor npc, String actionName, Bool isDid)
+  - GetAllActions(Actor npc, Bool isDid, Int topK = -1) -> String[]
+  - GetActionCount(Actor npc, Bool isDid, String actionName) -> Int
+  - IncrementInt(Actor npc, String intName)
+  - GetAllNPCs() -> Actor[]
+  - GetAllLovers(Actor npc, Int topK = -1) -> Actor[]
+  - GetLoverScore(Actor npc, Actor lover) -> Float
 
-### Existing Relationship Integration
-The mod intelligently handles pre-existing relationships:
-- Detects current spouses, courting partners, and lovers (relationship rank 4)
-- Generates historically appropriate relationship data
+**TTLL_ThreadsCollector** (global functions registered in Papyrus)
+  - CleanThread(Int ThreadID)
+  - CleanFinishedThreads()
+  - GetActors(Int ThreadID) -> Actor[]
+  - ExcitementContributorOrgasm(Int ThreadID, Actor npc)
+  - UpdateExcitementRate(Int ThreadID, Actor npc, Actor lover, Float rate)
+  - ApplyThreadToLedger(Int ThreadID)
+  - GetThreadInt/Str/Bool, SetThreadInt/Str/Bool
+  - GetActorInt/Flt/Bool, SetActorInt/Flt/Bool
 
-#### Historical Data Generation
-- **Spouse**: 40-100 encounters
-- **Courting**: 0-10 encounters
-- **Lover**: 10-40 encounters
+Notes on property paths: several functions accept dot-separated property paths (example: `"totalInternalClimax.did"`, `"actions_did.Vaginal"`, `"internalClimax.got"`). Property names are normalized to lowercase.
 
-Last encounter timing:
-- Active lovers: 1-7 days ago
-- Inactive relationships: 180-360 days ago
+## Behavior & important details
 
-## MCM Integration
+  - Thread data is runtime-only and will not be persisted. Use ApplyThreadToLedger when a scene finishes to persist results into the ledger.
+  - Ledger data is persisted across saves using SKSE serialization.
+  - When RelationsFinder is available at data load, the plugin will scan and seed existing relationships to produce realistic historical data (spouse/courting/lover). Missing forms are skipped with warnings.
+  - Action and property names are normalized to lowercase before storage and lookup for Papyrus compatibility.
 
-The Mod Configuration Menu (MCM) provides a comprehensive interface to:
-- View tracked NPCs
-- Explore detailed statistics
-- Review lover relationships
-- Analyze interaction history
+## Logging and debugging
 
-## Framework Support
-
-### OStim
-- Full native support
-- Complete statistic tracking
-- Detailed action and interaction logging
-
-### Sexlab
-- Basic framework support available
-- Integration possible through `TTLL_SexlabIntegration.psc`
-- Can be extended via custom implementation
-
-## Developer Information
-
-### Integration
-The mod is designed to be highly extensible and developer-friendly:
-- Public functions and scripts
-- Comprehensive API documentation
-- Easy access to all statistics and data
-
-### Key Components
-- `TTLL_Store`: Core data management
-- `TTLL_OstimIntegration`: OStim framework integration
-- `TTLL_SexlabIntegration`: Sexlab framework integration template
-
-For detailed API documentation, see:
-- [TTLL_Store Functions Reference](docs/TTLL_Store_Functions.md)
-
-### Custom Integration
-To integrate Sexlab functionality:
-1. Create a new mod as an overlay
-2. Override `TTLL_SexlabIntegration.psc`
-3. Implement the provided empty functions
-4. The integration will activate automatically when Sexlab is detected
+  - The plugin writes logs to the SKSE log directory (file: `LoversLedger.log`). It logs at trace/debug/info/warn/error and includes contextual information such as FormIDs and actor names when available.
+  - Papyrus scripts include debug helpers (`TTLL_Debug.psc`) used by the mod to print events and processing details to the console/log.
 
 ## Requirements
-- Skyrim Special Edition
-- SKSE
-- JContainers
-- OStim (for OStim features)
-- Sexlab (optional, for Sexlab features)
+
+  - Skyrim Special Edition
+  - SKSE (matching game version)
+  - OStim (for full OStim integration)
+  - SexLab (optional — the project includes a stub `TTLL_SexlabIntegration.psc` for custom integration)
+  - RelationsFinder (optional) to auto-seed relationships
 
 ## Installation
-1. Install required dependencies
-2. Install TT Lover's Ledger using your preferred mod manager
-3. Load after OStim/Sexlab in your load order
+
+  1. Install SKSE and required dependencies
+  2. Place `TT Lover's Ledger` in your Data folder (via your mod manager)
+  3. Ensure it loads after OStim/SexLab if you want integration
+
+## Troubleshooting
+
+  - If ledger entries aren't appearing:
+    - Check `LoversLedger.log` in the SKSE log folder for errors/warnings
+    - Verify `ApplyThreadToLedger` is called on thread end (OStim integration calls this automatically when `hadSex` is true)
+
+## Developer notes
+
+  - Keys and paths used in Papyrus functions are intentionally normalized; use lowercase when possible.
+  - The service provides public functions in C++ exposed to Papyrus; see `SKSE_Source/src` for the exact signatures and behavior.
 
 ## Changelog
 
-v0.0.2
-- Added event `ttll_thread_data_event` firing after OstimEnd and before Thread will be cleaned
-- track boolean `orgasmed` on each thread
-- added new thread property `finished` to check if thread was already finished so it can be cleaned after 3 seconds after finish or on start thread with same ThreadID
-v0.0.1: 
-- initial release
+  - v0.0.2:
+    - Add runtime event `ttll_thread_data_event` (fired after ledger update)
+    - Track `orgasmed` per-thread actor
+    - Add `finished` thread flag to allow delayed cleaning
+    - Improve logging across Papyrus bindings and core services
+
+  - v0.0.1: initial release

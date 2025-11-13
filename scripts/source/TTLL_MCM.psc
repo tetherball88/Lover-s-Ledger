@@ -3,9 +3,6 @@ Scriptname TTLL_MCM extends SKI_ConfigBase
 int property oid_SearchNpc auto
 int property oid_SearchLover auto
 int property oid_ReturnToExplore auto
-int property oid_SettingsClearData auto
-int property oid_SettingsExportData auto
-int property oid_SettingsImportData auto
 int property oid_NpcTopThreeActions auto
 int property oid_NpcTopThreeLovers auto
 

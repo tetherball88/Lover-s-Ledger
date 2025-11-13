@@ -1,7 +1,5 @@
 scriptname TTLL_OstimIntegration
 
-import TTLL_JCDomain
-
 Function OStimManager(string EventName, string StrArg, float ThreadID, Form Sender) global
     if (eventName == "ostim_thread_start")
         OStimStart(ThreadID as int)
@@ -16,7 +14,7 @@ Function OStimManager(string EventName, string StrArg, float ThreadID, Form Send
 EndFunction
 
 Function OStimStart(int ThreadID) global
-    TTLL_OstimThreadsCollector.CleanThread(ThreadID)
+    TTLL_ThreadsCollector.CleanThread(ThreadID)
 EndFunction
 
 Function OStimSceneChanged(int ThreadID) global
@@ -50,35 +48,50 @@ Function OStimOrgasm(int ThreadID, Actor npc) global
             endwhile
 
             If (hasVaginal)
-                TTLL_Store.IncrementLoverInternalClimaxDid(npc, Target)
-                TTLL_Store.IncrementLoverInternalClimaxGot(Target, npc)
+                TTLL_Store.SetLoverInt(npc, Target, "internalClimax.did", TTLL_Store.GetLoverInt(npc, Target, "internalClimax.did") + 1)
+                TTLL_Store.SetLoverInt(Target, npc, "internalClimax.got", TTLL_Store.GetLoverInt(Target, npc, "internalClimax.got") + 1)
             EndIf
 
             i += 1
         EndWhile
     endif
 
-    TTLL_OstimThreadsCollector.SetOrgasmed(ThreadID, npc)
+    TTLL_ThreadsCollector.SetActorBool(ThreadID, npc, "orgasmed", true)
 
-    TTLL_OstimThreadsCollector.ExcitementContributorOrgasm(ThreadID, npc)
+    TTLL_ThreadsCollector.ExcitementContributorOrgasm(ThreadID, npc)
 EndFunction
 
 Function OStimEnd(int ThreadID) global
-    if(TTLL_OstimThreadsCollector.GetHadSex(ThreadID))
+    if(TTLL_ThreadsCollector.GetThreadBool(ThreadID, "hadSex"))
         UpdateOnOStimEnd(ThreadID)
     endif
-    TTLL_OstimThreadsCollector.SetFinished(ThreadID, 1)
+    TTLL_ThreadsCollector.SetThreadBool(ThreadID, "finished", true)
+EndFunction
+
+float Function GetExcitement(actor npc, string actionType, string role) global
+    int roleInt = 4
+    if(role == "actor")
+        roleInt = 1
+    elseif(role == "target")
+        roleInt = 2
+    endif
+    return OData.GetActionStimulation(roleInt, npc.GetActorBase().GetFormID(), actionType)
+EndFunction
+
+Function UpdateExcitementContributorsOnSceneChange(int ThreadID, string actionType, Actor npc, string role, Actor lover) global
+    float rate = GetExcitement(npc, actionType, role)
+    TTLL_ThreadsCollector.UpdateExcitementRate(ThreadID, npc, lover, rate)
 EndFunction
 
 Function GetActions(int ThreadID, Actor npc) global
     string tag = "sexual"
     string sceneId = OThread.GetScene(ThreadID)
-        int actorIndex = OThread.GetActorPosition(ThreadID, npc)
+    int actorIndex = OThread.GetActorPosition(ThreadID, npc)
     int[] actionsByActor = OMetadata.FindActionsSuperloadCSVv2(sceneId, ParticipantPositionsAny = actorIndex + "", AnyActionTag = tag)
 
     if(actionsByActor.Length > 0)
-        TTLL_OstimThreadsCollector.SetHadSex(ThreadID)
-        TTLL_OstimThreadsCollector.SetLastSexualSceneId(ThreadID, OThread.GetScene(ThreadID))
+        TTLL_ThreadsCollector.SetThreadBool(ThreadID, "hadSex", true)
+        TTLL_ThreadsCollector.SetThreadStr(ThreadID, "lastSexualSceneId", OThread.GetScene(ThreadID))
     endif 
 
     int i = 0
@@ -89,15 +102,15 @@ Function GetActions(int ThreadID, Actor npc) global
         Actor osActor = OThread.GetActor(ThreadID, OMetadata.GetActionActor(sceneId, actionIndex))
         Actor osTarget = OThread.GetActor(ThreadID, OMetadata.GetActionTarget(sceneId, actionIndex))
 
-        TTLL_OstimThreadsCollector.UpdateExcitementContributorsOnSceneChange(ThreadID, actionType, osActor, "actor", osTarget)
-        TTLL_OstimThreadsCollector.UpdateExcitementContributorsOnSceneChange(ThreadID, actionType, osTarget, "target", osActor)
+        UpdateExcitementContributorsOnSceneChange(ThreadID, actionType, osActor, "actor", osTarget)
+        UpdateExcitementContributorsOnSceneChange(ThreadID, actionType, osTarget, "target", osActor)
         
-        TTLL_OstimThreadsCollector.SetDidGotProp(ThreadID, osActor, actionType, true)
-        TTLL_OstimThreadsCollector.SetDidGotProp(ThreadID, osTarget, actionType, false)
+        TTLL_ThreadsCollector.SetActorBool(ThreadID, osActor, "did." + actionType, true)
+        TTLL_ThreadsCollector.SetActorBool(ThreadID, osTarget, "got." + actionType, true)
 
-        if(osActor.GetActorBase().GetSex() == osTarget.GetActorBase().GetSex())
-            TTLL_OstimThreadsCollector.SetHadSameSexEncounter(ThreadID, osActor)
-            TTLL_OstimThreadsCollector.SetHadSameSexEncounter(ThreadID, osTarget)
+        if(osActor.GetActorBase().GetSex() == osTarget.GetActorBase().GetSex() && osActor != osTarget)
+            TTLL_ThreadsCollector.SetActorBool(ThreadID, osActor, "hadSameSexEncounter", true)
+            TTLL_ThreadsCollector.SetActorBool(ThreadID, osTarget, "hadSameSexEncounter", true)
         endif
         i += 1
     endwhile
@@ -108,90 +121,6 @@ EndFunction
   * @param {int} ThreadID - The ID of the thread.
 */;
 Function UpdateOnOStimEnd(int ThreadID) global
-    int JActors = TTLL_OstimThreadsCollector.GetActors(ThreadID)
-    int actorsCount = JFormMap_count(JActors)
-
-    string encounterType = TTLL_Utils.GetEncounterType(actorsCount)
-
-    CountThreadActions(ThreadID)
-
-    Actor npc = JFormMap_nextKey(JActors, previousKey=none, endKey=none) as Actor
-
-    while npc != none
-        TTLL_Store.UpdateNpcLastTime(npc)
-
-        if(encounterType == "couple")
-            TTLL_Store.IncrementExclusiveSexCount(npc)
-        elseif(encounterType == "group")
-            TTLL_Store.IncrementGroupSexCount(npc)
-        elseif(encounterType == "solo")
-            TTLL_Store.IncrementSoloSexCount(npc)
-        endif
-
-        bool hadSameSexEncounter = TTLL_OstimThreadsCollector.GetHadSameSexEncounter(ThreadID, npc)
-
-        if(hadSameSexEncounter)
-            TTLL_Store.IncrementSameSexEncounterCount(npc)
-        endif
-
-        int JExcitementContributors = TTLL_OstimThreadsCollector.GetExcitementContributors(ThreadID, npc)
-        Actor contributor = JFormMap_nextKey(JExcitementContributors, previousKey=none, endKey=none) as Actor
-        
-        while contributor != none
-            if(contributor != npc)
-                int JContributor = TTLL_OstimThreadsCollector.GetExcitementContributor(ThreadID, npc, contributor)
-                TTLL_Store.UpdateLover(npc, contributor, JFormMap_count(JActors), JMap_getFlt(JContributor, "orgasms"))
-            endif
-            
-            contributor = JFormMap_nextKey(JExcitementContributors, previousKey=contributor, endKey=none) as Actor
-        endwhile
-        
-        npc = JFormMap_nextKey(JActors, previousKey=npc, endKey=none) as Actor
-    endwhile
-
+    TTLL_ThreadsCollector.ApplyThreadToLedger(ThreadID)
     TTLL_Utils.SendThreadDataEvent(ThreadID)
-EndFunction
-
-;/**
-  * Updates the actions for all NPCs involved in a thread.
-  * @param {int} ThreadID - The ID of the thread.
-*/;
-Function CountThreadActions(int ThreadID) global
-    int OStimThreadActorsData = TTLL_OstimThreadsCollector.GetActors(ThreadID)
-
-    Actor npc = JFormMap_nextKey(OStimThreadActorsData, previousKey=none, endKey=none) as Actor
-    while npc != none
-        CountActions(npc, ThreadID, "did")
-        CountActions(npc, ThreadID, "got")
-        
-        npc = JFormMap_nextKey(OStimThreadActorsData, previousKey=npc, endKey=none) as Actor
-    endwhile
-EndFunction
-
-;/**
-  * Counts the actions for an NPC based on the type and thread actions.
-  * @param {actor} npc - The NPC actor.
-  * @param {string} type - The type of actions ("did" or "got").
-  * @param {int} JThreadActions - The JMap object containing the thread actions.
-*/;
-int Function CountActions(actor npc, int ThreadID, string actionType) global
-    int JThreadActions
-    int JNpcActions
-
-    if(actionType == "did")
-        JThreadActions = TTLL_OstimThreadsCollector.getDidObj(ThreadID, npc)
-    else
-        JThreadActions = TTLL_OstimThreadsCollector.getGotObj(ThreadID, npc)
-    endif
-
-    string threadAction = JMap_nextKey(JThreadActions, previousKey="", endKey="")
-    while(threadAction != "")
-        if(actionType == "did")
-            TTLL_Store.RecordNpcDidAction(npc, threadAction)
-        else
-            TTLL_Store.RecordNpcGotAction(npc, threadAction)
-        endif
-
-        threadAction = JMap_nextKey(JThreadActions, previousKey=threadAction, endKey="")
-    endwhile
 EndFunction

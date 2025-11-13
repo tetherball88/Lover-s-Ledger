@@ -1,7 +1,5 @@
 scriptname TTLL_MCM_NPCPage
 
-import TTLL_JCDomain
-
 Function RenderPage(TTLL_MCM mcm) global
     mcm.SetCursorFillMode(mcm.TOP_TO_BOTTOM)
     RenderLeftColumn(mcm)
@@ -12,24 +10,25 @@ EndFunction
 
 Function RenderLeftColumn(TTLL_MCM mcm) global
     Actor npc = TTLL_MCM_State.GetSelectedNpc()
-    string npcName = TTLL_Store.GetNpcName(npc)
-    bool isMale = TTLL_Store.GetNpcSex(npc) == 0
-    string raceVal = TTLL_Store.GetNpcRace(npc)
+    string npcName = TTLL_Utils.GetActorName(npc)
+    ActorBase npcAB = npc.GetActorBase()
+    bool isMale = npcAB.GetSex() == 0
+    string raceVal = npcAB.GetRace().GetName()
 
     mcm.oid_ReturnToExplore = mcm.AddTextOption("", "Return to explore")
-    mcm.AddHeaderOption(TTLL_MCM_State.AddColored(isMale, TTLL_Store.GetNpcName(npc) + "'s data"))
+    mcm.AddHeaderOption(TTLL_MCM_State.AddColored(isMale, npcName + "'s data"))
     mcm.AddTextOption("Race", raceVal)
-    mcm.AddTextOption("Last time had sex", TTLL_Store.GetNpcLastTimeString(npc))
-    mcm.AddTextOption("Participated in solo encounter", TTLL_Store.GetSoloSexCount(npc) + " times")
-    mcm.AddTextOption("Participated in couple encounter", TTLL_Store.GetExclusiveSexCount(npc) + " times")
-    mcm.AddTextOption("Participated in group encounter", TTLL_Store.GetGroupSexCount(npc) + " times")
-    mcm.AddTextOption("Had encounter with same sex character", TTLL_Store.GetSameSexEncounterCount(npc) + " times")
-    int climaxInsideDid = TTLL_Store.GetNpcInternalClimaxDid(npc)
+    mcm.AddTextOption("Last time had sex", TTLL_Store.GetNpcFlt(npc, "lastTime"))
+    mcm.AddTextOption("Participated in solo encounter", TTLL_Store.GetNpcInt(npc, "soloSex") + " times")
+    mcm.AddTextOption("Participated in couple encounter", TTLL_Store.GetNpcInt(npc, "exclusiveSex") + " times")
+    mcm.AddTextOption("Participated in group encounter", TTLL_Store.GetNpcInt(npc, "groupSex") + " times")
+    mcm.AddTextOption("Had encounter with same sex character", TTLL_Store.GetNpcInt(npc, "sameSexEncounter") + " times")
+    int climaxInsideDid = TTLL_Store.GetNpcInt(npc, "internalClimax.did")
     if(climaxInsideDid != 0)
         mcm.AddTextOption(npcName + " climaxed inside lover", climaxInsideDid + " times")
     endif
-    
-    int climaxInsideGot = TTLL_Store.GetNpcInternalClimaxGot(npc)
+
+    int climaxInsideGot = TTLL_Store.GetNpcInt(npc, "internalClimax.got")
     if(climaxInsideGot != 0)
         mcm.AddTextOption("Lover climaxed inside " + npcName, climaxInsideGot + " times")
     endif
@@ -38,25 +37,25 @@ Function RenderLeftColumn(TTLL_MCM mcm) global
     mcm.oid_NpcTopThreeLovers = mcm.AddTextOption("Top three lovers", "")
 
     mcm.AddHeaderOption("Actions performed(actor role):")
-    int JDidActions = TTLL_Store.GetNpcDidActions(npc)
-    if(JMap_count(JDidActions) == 0)
+    string[] didActions = TTLL_Store.GetAllActions(npc, true)
+    if(didActions.Length == 0)
         mcm.AddTextOption(npcName + " didn't perform any actions", "")
     endif
-    string didAction = JMap_nextKey(JDidActions, previousKey="")
-    while didAction != ""
-        mcm.AddTextOption(didAction + " (" + TTLL_Store.GetNpcDidActionCount(npc, didAction) + ")", "")
-        didAction = JMap_nextKey(JDidActions, previousKey=didAction)
+    int i = 0
+    while(i < didActions.Length)
+        mcm.AddTextOption(didActions[i] + " (" + TTLL_Store.GetActionCount(npc, true, didActions[i]) + ")", "")
+        i += 1
     endwhile
 
     mcm.AddHeaderOption("Actions received(target role):")
-    int JGotActions = TTLL_Store.GetNpcGotActions(npc)
-    if(JMap_count(JGotActions) == 0)
+    string[] gotActions = TTLL_Store.GetAllActions(npc, false)
+    if(gotActions.Length == 0)
         mcm.AddTextOption(npcName + " didn't receive any actions", "")
     endif
-    string gotAction = JMap_nextKey(JGotActions, previousKey="")
-    while gotAction != ""
-        mcm.AddTextOption(gotAction + " (" + TTLL_Store.GetNpcGotActionCount(npc, gotAction) + ")", "")
-        gotAction = JMap_nextKey(JGotActions, previousKey=gotAction)
+    int j = 0
+    while(j < gotActions.Length)
+        mcm.AddTextOption(gotActions[j] + " (" + TTLL_Store.GetActionCount(npc, false, gotActions[j]) + ")", "")
+        j += 1
     endwhile
 EndFunction
 
@@ -65,15 +64,16 @@ Function RenderRightColumn(TTLL_MCM mcm) global
     mcm.AddHeaderOption("Lovers:")
     Actor npc = TTLL_MCM_State.GetSelectedNpc()
     string searchValue = TTLL_MCM_State.GetSearchValueLover()
-    string npcName = TTLL_Store.GetNpcName(npc)
+    string npcName = TTLL_Utils.GetActorName(npc)
     Actor selectedLover = TTLL_MCM_State.GetSelectedLover()
-    int JLovers = TTLL_Store.GetNpcLovers(npc)
-    if(JFormMap_count(JLovers) == 0)
+    Actor[] lovers = TTLL_Store.GetAllLovers(npc)
+    if(lovers.Length == 0)
         mcm.AddTextOption(npcName + " doesnt't have any lovers", "")
     endif
-    Actor lover = JFormMap_nextKey(JLovers, previousKey=none) as Actor
-    while(lover != none)
-        string loverName = TTLL_Store.GetLoverName(npc, lover)
+    int i = 0
+    while(i < lovers.Length)
+        Actor lover = lovers[i]
+        string loverName = TTLL_Utils.GetActorName(lover)
         bool shouldAdd = false
         if(searchValue != "") 
             shouldAdd = StringUtil.Find(loverName, searchValue) != -1
@@ -81,34 +81,35 @@ Function RenderRightColumn(TTLL_MCM mcm) global
             shouldAdd = true
         endif
         if(shouldAdd)
-            int opt = mcm.AddTextOption(TTLL_Store.GetLoverName(npc, lover) + " with score - " + TTLL_Store.GetLoverScore(npc, lover), "")
+            int opt = mcm.AddTextOption(loverName + " with score - " + TTLL_Store.GetLoverScore(npc, lover), "")
             TTLL_MCM_State.AddLoverOption(opt, lover)
             if(lover == selectedLover)
                 RenderLoverData(mcm, npc, lover)
             endif
         endif
         
-        lover = JFormMap_nextKey(JLovers, previousKey=lover) as Actor
+        i += 1
     endwhile
 EndFunction
 
 Function RenderLoverData(TTLL_MCM mcm, Actor npc, Actor lover) global
-    string npcName = TTLL_Store.GetNpcName(npc)
-    string loverName = TTLL_Store.GetLoverName(npc, lover)
+    string npcName = TTLL_Utils.GetActorName(npc)
+    string loverName = TTLL_Utils.GetActorName(lover)
+    string raceVal = lover.GetActorBase().GetRace().GetName()
 
     mcm.AddHeaderOption("-- START " + loverName + "'s data --")
-    mcm.AddTextOption("Lover's race", TTLL_Store.GetLoverRace(npc, lover))
-    mcm.oid_LoverLastTime = mcm.AddTextOption("Last time had sex with", TTLL_Store.GetLoverLastTimeString(npc, lover))
-    mcm.oid_LoverExclusive = mcm.AddTextOption("Participated in couple encounter", TTLL_Store.GetLoverExclusiveSexCount(npc, lover) + " times")
-    mcm.oid_LoverGroup = mcm.AddTextOption("Participated in group encounter", TTLL_Store.GetLoverGroupSexCount(npc, lover) + " times")
-    mcm.oid_LoverOrgasms = mcm.AddTextOption("Orgasms", TTLL_Store.GetLoverOrgasms(npc, lover) + " times")
+    mcm.AddTextOption("Lover's race", raceVal)
+    mcm.oid_LoverLastTime = mcm.AddTextOption("Last time had sex with", TTLL_Store.GetLoverFlt(npc, lover, "lastTime"))
+    mcm.oid_LoverExclusive = mcm.AddTextOption("Participated in couple encounter", TTLL_Store.GetLoverInt(npc, lover, "exclusivesex") + " times")
+    mcm.oid_LoverGroup = mcm.AddTextOption("Participated in group encounter", TTLL_Store.GetLoverInt(npc, lover, "partofsamegroupsex") + " times")
+    mcm.oid_LoverOrgasms = mcm.AddTextOption("Orgasms", TTLL_Store.GetLoverFlt(npc, lover, "orgasms") + " times")
 
-    int climaxInsideDid = TTLL_Store.GetLoverInternalClimaxDid(npc, lover)
+    int climaxInsideDid = TTLL_Store.GetLoverInt(npc, lover, "internalClimax.did")
     if(climaxInsideDid != 0)
         mcm.AddTextOption(npcName + " climaxed inside " + loverName, climaxInsideDid + " times")
     endif
-    
-    int climaxInsideGot = TTLL_Store.GetLoverInternalClimaxGot(npc, lover)
+
+    int climaxInsideGot = TTLL_Store.GetLoverInt(npc, lover, "internalClimax.got")
     if(climaxInsideGot != 0)
         mcm.AddTextOption(loverName + " climaxed inside " + npcName, climaxInsideGot + " times")
     endif
@@ -137,20 +138,19 @@ EndFunction
 ; Highlight
 Function OnOptionHighlight(TTLL_MCM mcm, int option) global
     Actor npc = TTLL_MCM_State.GetSelectedNpc()
-    string npcName = TTLL_Store.GetNpcName(npc)
+    string npcName = TTLL_Utils.GetActorName(npc)
     Actor selectedLover = TTLL_MCM_State.GetSelectedLover()
-    string selectedLoverName = TTLL_Store.GetLoverName(npc, selectedLover)
+    string selectedLoverName = TTLL_Utils.GetActorName(selectedLover)
     if(option == mcm.oid_NpcTopThreeActions)
-        mcm.SetInfoText("Did: " + TTLL_Utils.JoinJMapKeys(TTLL_Store.GetNpcDidTopThreeActions(npc)) + "\nReceived: " + TTLL_Utils.JoinJMapKeys(TTLL_Store.GetNpcGotTopThreeActions(npc)))
+        mcm.SetInfoText("Did: " + TTLL_Store.GetAllActions(npc, true, 3) + "\nReceived: " + TTLL_Store.GetAllActions(npc, false, 3))
     elseif(option == mcm.oid_NpcTopThreeLovers)
-        int lovers = TTLL_Store.GetNpcTopThreeLovers(npc)
+        Actor[] lovers = TTLL_Store.GetAllLovers(npc, 3)
         string info = ""
 
-        Actor lover = JFormMap_nextKey(lovers, previousKey=none) as Actor
-        
-        while(lover != none)
-            info += TTLL_Store.GetLoverName(npc, lover) + " with score - " + TTLL_Store.GetLoverScore(npc, lover) + "\n"
-            lover = JFormMap_nextKey(lovers, previousKey=lover) as Actor
+        int i = 0
+        while(i < lovers.Length)
+            info += TTLL_Utils.GetActorName(lovers[i]) + " with score - " + TTLL_Store.GetLoverScore(npc, lovers[i]) + "\n"
+            i += 1
         endwhile
         
         mcm.SetInfoText(info)
@@ -166,7 +166,7 @@ Function OnOptionHighlight(TTLL_MCM mcm, int option) global
         mcm.SetInfoText("Search characters by name(can be partial)")
     else
         Actor lover = TTLL_MCM_State.GetLoverOption(option)
-        string loverName = TTLL_Store.GetLoverName(npc, lover)
+        string loverName = TTLL_Utils.GetActorName(lover)
         if(lover != none)
             mcm.SetInfoText("Click to get more insights between " + npcName + " and their lover " + loverName)
         endif

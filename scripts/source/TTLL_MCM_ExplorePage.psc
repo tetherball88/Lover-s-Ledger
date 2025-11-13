@@ -1,7 +1,5 @@
 scriptname TTLL_MCM_ExplorePage
 
-import TTLL_JCDomain
-
 Function RenderPage(TTLL_MCM mcm) global
     mcm.SetCursorFillMode(mcm.TOP_TO_BOTTOM)
     RenderLeftColumn(mcm)
@@ -21,14 +19,15 @@ EndFunction
 
 Function RenderNpcsList(TTLL_MCM mcm) global
     mcm.AddHeaderOption("Characters: ")
-    int JNpcs = TTLL_Store.GetNpcs()
+    Actor[] npcs = TTLL_Store.GetAllNPCs()
     string searchValue = TTLL_MCM_State.GetSearchValueNpc()
 
-    Actor npc = JFormMap_nextKey(JNpcs, previousKey=none, endKey=none) as Actor
+    int i = 0
 
-    while(npc != none)
-        string npcName = TTLL_Store.GetNpcName(npc)
-        bool isMale = TTLL_Store.GetNpcSex(npc) == 0
+    while(i < npcs.Length)
+        Actor npc = npcs[i]
+        string npcName = TTLL_Utils.GetActorName(npc)
+        bool isMale = npc.GetActorBase().GetSex() == 0
         bool shouldAdd = false
         if(searchValue != "") 
             shouldAdd = StringUtil.Find(npcName, searchValue) != -1
@@ -40,7 +39,7 @@ Function RenderNpcsList(TTLL_MCM mcm) global
             TTLL_MCM_State.AddNpcOption(mcm.AddTextOption(TTLL_MCM_State.AddColored(isMale, npcName), ""), npc)
         endif
 
-        npc = JFormMap_nextKey(JNpcs, previousKey=npc, endKey=none) as Actor
+        i += 1
     endwhile
 EndFunction
 
@@ -59,7 +58,7 @@ Function OnOptionHighlight(TTLL_MCM mcm, int option) global
     else
         Actor npc = TTLL_MCM_State.GetNpcOption(option)
         if(npc != none)
-            mcm.SetInfoText("View " + TTLL_Store.GetNpcName(npc) + "'s data")
+            mcm.SetInfoText("View " + TTLL_Utils.GetActorName(npc) + "'s data")
         endif
     endif
     

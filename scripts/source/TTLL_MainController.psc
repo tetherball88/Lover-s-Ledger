@@ -11,8 +11,6 @@ Event OnInit()
 EndEvent
 
 Function Maintenance()
-    TTLL_Store.ImportInitialData()
-
     if Game.GetModByName("OStim.esp") != 255
         OstimSetup()
     EndIf
@@ -22,8 +20,6 @@ Function Maintenance()
     if slf != none
         TTLL_SexlabIntegration.Maintenance(self, slf)
     endif
-
-    TTLL_Store.SetHasTTRF(Game.GetModByName("TT_RelationsFinder.esp") != 255)
 EndFunction
 
 Function OstimSetup()
@@ -52,6 +48,6 @@ Function OStimEnd(string EventName, string StrArg, float ThreadID, Form Sender)
 EndFunction
 
 Event OnUpdate()
-    TTLL_OstimThreadsCollector.CleanFinishedThreads()
+    TTLL_ThreadsCollector.CleanFinishedThreads()
 EndEvent
 

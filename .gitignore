@@ -6,3 +6,17 @@ SkyrimSE.code-workspace
 skyrimse.ppj
 *.7z
 *.zip
+
+build/
+SKSE_Source/build/
+cmake-build*/
+*.pdb
+*.exp
+*.lib
+*.obj
+*.o
+*.exe
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
