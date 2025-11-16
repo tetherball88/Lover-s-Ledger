@@ -99,6 +99,17 @@ Notes on property paths: several functions accept dot-separated property paths (
 
 ## Changelog
 
+  - v0.1.0.dev:
+    - **Major Architecture Change**: Migrated from JContainers-based Papyrus implementation to native SKSE plugin
+    - Implemented `LoversLedgerService` in C++ with SKSE serialization for persistent ledger data
+    - Implemented `ThreadsCollector` in C++ for runtime thread tracking and excitement contribution system
+    - Added Papyrus native function bindings for `TTLL_Store` and `TTLL_ThreadsCollector`
+    - Removed dependencies on JContainers (JCData) and related Papyrus scripts
+    - Significantly reduced Papyrus script complexity and overhead
+    - Added `RelationsFinderAPI.h` integration for optional relationship seeding
+    - Improved performance and reliability through native C++ implementation
+    - Added comprehensive logging to `LoversLedger.log` in SKSE log directory
+
   - v0.0.2:
     - Add runtime event `ttll_thread_data_event` (fired after ledger update)
     - Track `orgasmed` per-thread actor
