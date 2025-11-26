@@ -28,11 +28,31 @@ elseif(DEFINED SKYRIM_MODS_FOLDER AND IS_DIRECTORY "${SKYRIM_MODS_FOLDER}")
     set(OUTPUT_FOLDER "${SKYRIM_MODS_FOLDER}/${MOD_FOLDER_NAME}")
 endif()
 
-# Setup your SKSE plugin as an SKSE plugin!
-find_package(CommonLibSSE CONFIG REQUIRED)
+set(CommonLibPath "extern/CommonLibSSE-NG")
+set(CommonLibName "CommonLibSSE")
+
+set(BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+
+# Force static linking for all vcpkg dependencies
+set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
+
+if (DEFINED CommonLibPath AND NOT ${CommonLibPath} STREQUAL "")
+        add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
+else ()
+        message(
+                FATAL_ERROR
+                "Variable ${CommonLibName}Path is not set."
+        )
+endif()
+
+include("${CommonLibPath}/cmake/CommonLibSSE.cmake")
 
 # Otherwise, you can set OUTPUT_FOLDER to any place you'd like :)
 # set(OUTPUT_FOLDER "C:/path/to/any/folder")
+
+# Setup your SKSE plugin as an SKSE plugin!
+# find_package(CommonLibSSE CONFIG REQUIRED)
 
 # Collect all source files
 file(GLOB_RECURSE SOURCES
@@ -41,16 +61,53 @@ file(GLOB_RECURSE SOURCES
     "version.rc"
 )
 
-# Setup your SKSE plugin as an SKSE plugin!
-find_package(CommonLibSSE CONFIG REQUIRED)
+# add_library(${PROJECT_NAME} SHARED ${SOURCES})
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23) # <--- use C++23 standard
 # Ensure project root and src/ are on the include path so files can include headers by name
 target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h) # <--- PCH.h is required!
 
+# Add include directories
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
 # Silence Microsoft STL deprecation warnings
 target_compile_definitions(${PROJECT_NAME} PRIVATE _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING)
+
+# Workaround for MSBuild 17.14 bug: create props file to override ATL_KeyFile
+if(MSVC)
+    set(PROPS_FILE "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.props")
+    file(WRITE "${PROPS_FILE}" "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
+    file(APPEND "${PROPS_FILE}" "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n")
+    file(APPEND "${PROPS_FILE}" "  <PropertyGroup>\n")
+    file(APPEND "${PROPS_FILE}" "    <!-- Override ATL_KeyFile to empty to bypass MSBuild 17.14 bug -->\n")
+    file(APPEND "${PROPS_FILE}" "    <ATL_KeyFile></ATL_KeyFile>\n")
+    file(APPEND "${PROPS_FILE}" "  </PropertyGroup>\n")
+    file(APPEND "${PROPS_FILE}" "</Project>\n")
+
+    # Tell Visual Studio to import our props file (use relative path to avoid space issues)
+    set_target_properties(${PROJECT_NAME} PROPERTIES VS_USER_PROPS "${PROJECT_NAME}.props")
+endif()
+
+# Force static linking of runtime library to reduce dependencies
+if(MSVC)
+    set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # Also ensure CommonLibSSE uses static runtime
+    if(TARGET ${CommonLibName})
+        set_property(TARGET ${CommonLibName} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+
+    # Additional linker flags to embed dependencies
+    target_link_options(${PROJECT_NAME} PRIVATE
+        /INCREMENTAL:NO
+        /OPT:REF
+        /OPT:ICF
+    )
+endif()
 
 # When your SKSE .dll is compiled, this will automatically copy the .dll into your mods folder.
 # Only works if you configure DEPLOY_ROOT above (or set the SKYRIM_MODS_FOLDER environment variable)

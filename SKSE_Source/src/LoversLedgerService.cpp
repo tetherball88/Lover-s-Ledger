@@ -867,6 +867,53 @@ namespace LL {
         SKSE::log::info("LoversLedgerService: All data cleared");
     }
 
+    std::pair<int, int> LoversLedgerService::CleanupInvalidFormIDs() {
+        std::unique_lock lock(_mutex);
+
+        int npcsRemoved = 0;
+        int loversRemoved = 0;
+
+        SKSE::log::info("CleanupInvalidFormIDs: Starting cleanup...");
+
+        // First pass: remove invalid NPCs
+        std::vector<std::uint32_t> npcsToRemove;
+        for (const auto& [npcFormID, npcData] : _store) {
+            auto* form = RE::TESForm::LookupByID(npcFormID);
+            if (!form || !form->As<RE::Actor>()) {
+                npcsToRemove.push_back(npcFormID);
+            }
+        }
+
+        for (auto npcFormID : npcsToRemove) {
+            _store.erase(npcFormID);
+            npcsRemoved++;
+            SKSE::log::debug("  Removed invalid NPC FormID 0x{:X}", npcFormID);
+        }
+
+        // Second pass: remove invalid lovers from remaining NPCs
+        for (auto& [npcFormID, npcData] : _store) {
+            std::vector<std::uint32_t> loversToRemove;
+
+            for (const auto& [loverFormID, loverData] : npcData.lovers) {
+                auto* form = RE::TESForm::LookupByID(loverFormID);
+                if (!form || !form->As<RE::Actor>()) {
+                    loversToRemove.push_back(loverFormID);
+                }
+            }
+
+            for (auto loverFormID : loversToRemove) {
+                npcData.lovers.erase(loverFormID);
+                loversRemoved++;
+                SKSE::log::debug("  Removed invalid lover FormID 0x{:X} from NPC 0x{:X}", loverFormID, npcFormID);
+            }
+        }
+
+        SKSE::log::info("CleanupInvalidFormIDs: Cleanup complete - {} NPCs removed, {} lovers removed",
+                       npcsRemoved, loversRemoved);
+
+        return {npcsRemoved, loversRemoved};
+    }
+
     void LoversLedgerService::SetRelationsFinderAPI(
         RelationsFinderAPI::GetNpcRelationshipsCallbackFn apiFunc) noexcept {
         _relationsFinderAPI = apiFunc;
@@ -1085,6 +1132,50 @@ namespace LL {
         npcIt->second.totalInternalClimax.did += didInternal;
         npcIt->second.totalInternalClimax.got += gotInternal;
 
+        // Ensure partner is also in the Lover's Ledger with reciprocal data
+        // Only create reciprocal if we generated new data (not using existing reciprocal data)
+        if (!hasReciprocalData) {
+            // Check if partner exists in store, if not create them
+            auto partnerIt = _store.find(loverFormID);
+            if (partnerIt == _store.end()) {
+                // Partner doesn't exist, create entry
+                _store[loverFormID] = NPCData{};
+                partnerIt = _store.find(loverFormID);
+                SKSE::log::debug("  Created new NPCData entry for partner 0x{:X}", loverFormID);
+            }
+
+            // Check if partner already has this NPC as a lover
+            auto& partnerData = partnerIt->second;
+            if (partnerData.lovers.find(npcFormID) == partnerData.lovers.end()) {
+                // Create reciprocal relationship with flipped did/got for internal climax
+                auto& reciprocalLoverData = partnerData.lovers[npcFormID];
+                reciprocalLoverData.exclusiveSex = sexTimes;
+                reciprocalLoverData.partOfSameGroupSex = 0;
+                reciprocalLoverData.lastTime = lastTime;
+                reciprocalLoverData.orgasms = orgasms;
+                reciprocalLoverData.internalClimax.did = gotInternal;  // Flip: our "got" is their "did"
+                reciprocalLoverData.internalClimax.got = didInternal;  // Flip: our "did" is their "got"
+
+                // Re-lookup partner (map may have reallocated)
+                partnerIt = _store.find(loverFormID);
+                if (partnerIt != _store.end()) {
+                    // Update partner's totals
+                    partnerIt->second.exclusiveSex += sexTimes;
+                    partnerIt->second.lastTime = std::max(partnerIt->second.lastTime, lastTime);
+                    partnerIt->second.totalInternalClimax.did += gotInternal;
+                    partnerIt->second.totalInternalClimax.got += didInternal;
+
+                    SKSE::log::debug(
+                        "  Created reciprocal relationship for partner 0x{:X} -> NPC 0x{:X}, sexTimes:{}, "
+                        "didInternal:{}, gotInternal:{}",
+                        loverFormID, npcFormID, sexTimes, gotInternal, didInternal);
+                }
+            } else {
+                SKSE::log::debug("  Partner 0x{:X} already has NPC 0x{:X} as lover, skipping reciprocal creation",
+                                 loverFormID, npcFormID);
+            }
+        }
+
         SKSE::log::debug(
             "CreateExistingLoverInternal: COMPLETE - NPC 0x{:X}, Lover 0x{:X}, sexTimes:{}, orgasms:{}, "
             "didInternal:{}, gotInternal:{}",
@@ -1146,39 +1237,49 @@ namespace LL {
 
             SKSE::log::info("Loading {} NPC records", numNPCs);
 
-            std::unique_lock lock(_mutex);
-            _store.clear();
+            {
+                std::unique_lock lock(_mutex);
+                _store.clear();
 
-            for (std::uint32_t i = 0; i < numNPCs; ++i) {
-                std::uint32_t npcFormID = 0;
-                readBytes = a_intfc->ReadRecordData(&npcFormID, sizeof(npcFormID));
-                if (readBytes != sizeof(npcFormID)) {
-                    SKSE::log::error("Failed to read NPC formID");
-                    continue;
-                }
-
-                // Resolve formID after load
-                std::uint32_t resolvedNPCID = 0;
-                if (!a_intfc->ResolveFormID(npcFormID, resolvedNPCID)) {
-                    SKSE::log::warn("Failed to resolve NPC formID 0x{:X}, skipping", npcFormID);
-                    // Skip this NPC's data
-                    NPCData tempData;
-                    if (!tempData.Load(a_intfc)) {
-                        SKSE::log::error("Failed to skip invalid NPC data");
+                for (std::uint32_t i = 0; i < numNPCs; ++i) {
+                    std::uint32_t npcFormID = 0;
+                    readBytes = a_intfc->ReadRecordData(&npcFormID, sizeof(npcFormID));
+                    if (readBytes != sizeof(npcFormID)) {
+                        SKSE::log::error("Failed to read NPC formID");
+                        continue;
                     }
-                    continue;
+
+                    // Resolve formID after load
+                    std::uint32_t resolvedNPCID = 0;
+                    if (!a_intfc->ResolveFormID(npcFormID, resolvedNPCID)) {
+                        SKSE::log::warn("Failed to resolve NPC formID 0x{:X}, skipping", npcFormID);
+                        // Skip this NPC's data
+                        NPCData tempData;
+                        if (!tempData.Load(a_intfc)) {
+                            SKSE::log::error("Failed to skip invalid NPC data");
+                        }
+                        continue;
+                    }
+
+                    NPCData npcData;
+                    if (!npcData.Load(a_intfc)) {
+                        SKSE::log::error("Failed to load NPC data for formID 0x{:X}", resolvedNPCID);
+                        continue;
+                    }
+
+                    _store[resolvedNPCID] = std::move(npcData);
                 }
 
-                NPCData npcData;
-                if (!npcData.Load(a_intfc)) {
-                    SKSE::log::error("Failed to load NPC data for formID 0x{:X}", resolvedNPCID);
-                    continue;
-                }
+                SKSE::log::info("LoversLedgerService: Load complete - {} NPCs loaded", _store.size());
+            }  // lock is released here
 
-                _store[resolvedNPCID] = std::move(npcData);
+            // Automatically cleanup invalid FormIDs after loading
+            SKSE::log::info("Running automatic cleanup of invalid FormIDs...");
+            auto [npcsRemoved, loversRemoved] = CleanupInvalidFormIDs();
+            if (npcsRemoved > 0 || loversRemoved > 0) {
+                SKSE::log::info("Automatic cleanup removed {} invalid NPCs and {} invalid lovers", npcsRemoved,
+                               loversRemoved);
             }
-
-            SKSE::log::info("LoversLedgerService: Load complete - {} NPCs loaded", _store.size());
         }
     }
 

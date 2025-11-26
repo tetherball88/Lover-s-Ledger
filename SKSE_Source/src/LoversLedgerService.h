@@ -121,6 +121,17 @@ namespace LL {
         // Utility: clear storage
         void ClearAll();
 
+        // Direct data access for UI (returns pointer, nullptr if not found)
+        NPCData* GetNPCData(std::uint32_t npcFormID);
+        const NPCData* GetNPCData(std::uint32_t npcFormID) const;
+
+        // Delete NPC data entirely
+        void DeleteNPCData(std::uint32_t npcFormID);
+
+        // Cleanup: remove invalid FormIDs (NPCs/lovers that no longer exist)
+        // Returns the number of NPCs and lovers removed
+        std::pair<int, int> CleanupInvalidFormIDs();
+
     private:
         LoversLedgerService() = default;
         ~LoversLedgerService() = default;

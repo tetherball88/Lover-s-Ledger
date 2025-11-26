@@ -142,7 +142,7 @@ namespace LL_Papyrus {
                     SKSE::log::warn("GetAllNPCs: FormID 0x{:X} is not an actor", formID);
                 }
             } else {
-                SKSE::log::warn("GetAllNPCs: Failed to lookup FormID 0x{:X}", formID);
+                SKSE::log::debug("GetAllNPCs: Failed to lookup FormID 0x{:X}", formID);
             }
         }
 
@@ -173,7 +173,7 @@ namespace LL_Papyrus {
                     SKSE::log::warn("GetAllLovers: Lover FormID 0x{:X} is not an actor", loverID);
                 }
             } else {
-                SKSE::log::warn("GetAllLovers: Failed to lookup lover FormID 0x{:X}", loverID);
+                SKSE::log::debug("GetAllLovers: Failed to lookup lover FormID 0x{:X}", loverID);
             }
         }
 

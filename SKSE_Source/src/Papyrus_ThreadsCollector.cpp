@@ -41,7 +41,7 @@ namespace OTC_Papyrus {
                     SKSE::log::warn("GetActors: FormID 0x{:X} is not an actor", formID);
                 }
             } else {
-                SKSE::log::warn("GetActors: Failed to lookup FormID 0x{:X}", formID);
+                SKSE::log::debug("GetActors: Failed to lookup FormID 0x{:X}", formID);
             }
         }
 
