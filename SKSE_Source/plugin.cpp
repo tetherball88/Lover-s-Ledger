@@ -8,6 +8,7 @@
 #include "src/Papyrus_LoversLedger.h"
 #include "src/Papyrus_ThreadsCollector.h"
 #include "src/RelationsFinderAPI.h"
+#include "src/UI.h"
 
 using namespace SKSE;
 
@@ -97,6 +98,9 @@ SKSEPluginLoad(const LoadInterface* skse) {
                         if (auto* console = RE::ConsoleLog::GetSingleton()) {
                             console->Print("LoversLedger: Ready");
                         }
+
+                        // Register SKSEMenuFramework UI
+                        LoversLedgerUI::RegisterMenu();
 
                         // Query RelationsFinder API via exported function
                         SKSE::log::info("Querying RelationsFinder API...");

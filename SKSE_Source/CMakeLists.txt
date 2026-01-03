@@ -64,8 +64,8 @@ file(GLOB_RECURSE SOURCES
 # add_library(${PROJECT_NAME} SHARED ${SOURCES})
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23) # <--- use C++23 standard
-# Ensure project root and src/ are on the include path so files can include headers by name
-target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
+# Ensure project root, src/, and include/ are on the include path so files can include headers by name
+target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/include)
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h) # <--- PCH.h is required!
 
 # Add include directories

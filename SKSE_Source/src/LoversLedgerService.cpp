@@ -1288,4 +1288,33 @@ namespace LL {
         ClearAll();
     }
 
+    NPCData* LoversLedgerService::GetNPCData(std::uint32_t npcFormID) {
+        std::shared_lock lock(_mutex);
+        auto it = _store.find(npcFormID);
+        if (it == _store.end()) {
+            return nullptr;
+        }
+        return &it->second;
+    }
+
+    const NPCData* LoversLedgerService::GetNPCData(std::uint32_t npcFormID) const {
+        std::shared_lock lock(_mutex);
+        auto it = _store.find(npcFormID);
+        if (it == _store.end()) {
+            return nullptr;
+        }
+        return &it->second;
+    }
+
+    void LoversLedgerService::DeleteNPCData(std::uint32_t npcFormID) {
+        std::unique_lock lock(_mutex);
+        auto it = _store.find(npcFormID);
+        if (it != _store.end()) {
+            SKSE::log::info("DeleteNPCData: Deleting NPC 0x{:X}", npcFormID);
+            _store.erase(it);
+        } else {
+            SKSE::log::warn("DeleteNPCData: NPC 0x{:X} not found", npcFormID);
+        }
+    }
+
 }  // namespace LL
