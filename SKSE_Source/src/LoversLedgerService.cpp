@@ -665,6 +665,8 @@ namespace LL {
             return;
         }
 
+        bool needsRecalc = false;
+
         // Single property names
         if (parts.size() == 1) {
             static const std::unordered_map<std::string, std::function<void(LoverData&, int)>> intSetters = {
@@ -674,16 +676,35 @@ namespace LL {
             auto it = intSetters.find(parts[0]);
             if (it != intSetters.end()) {
                 it->second(lover, value);
+                needsRecalc = true;
             }
-            return;
         }
 
         // Nested properties
         if (parts.size() == 2 && parts[0] == "internalclimax") {
             if (parts[1] == "did") {
                 lover.internalClimax.did = value;
+                needsRecalc = true;
             } else if (parts[1] == "got") {
                 lover.internalClimax.got = value;
+                needsRecalc = true;
+            }
+        }
+
+        // Recalculate NPC totals from all lovers
+        if (needsRecalc) {
+            npc.exclusiveSex = 0;
+            npc.groupSex = 0;
+            npc.totalInternalClimax.did = 0;
+            npc.totalInternalClimax.got = 0;
+            npc.lastTime = 0.0f;
+
+            for (const auto& [loverID, loverData] : npc.lovers) {
+                npc.exclusiveSex += loverData.exclusiveSex;
+                npc.groupSex += loverData.partOfSameGroupSex;
+                npc.totalInternalClimax.did += loverData.internalClimax.did;
+                npc.totalInternalClimax.got += loverData.internalClimax.got;
+                npc.lastTime = std::max(npc.lastTime, loverData.lastTime);
             }
         }
     }
@@ -707,6 +728,14 @@ namespace LL {
             auto it = floatSetters.find(parts[0]);
             if (it != floatSetters.end()) {
                 it->second(lover, value);
+
+                // Update NPC's lastTime if this lover's lastTime changed
+                if (parts[0] == "lasttime") {
+                    npc.lastTime = 0.0f;
+                    for (const auto& [loverID, loverData] : npc.lovers) {
+                        npc.lastTime = std::max(npc.lastTime, loverData.lastTime);
+                    }
+                }
             }
         }
     }
@@ -1128,7 +1157,7 @@ namespace LL {
 
         // Update NPC totals
         npcIt->second.exclusiveSex += sexTimes;
-        npcIt->second.lastTime = std::max(npcIt->second.lastTime, lastTime);
+        npcIt->second.lastTime = lastTime;
         npcIt->second.totalInternalClimax.did += didInternal;
         npcIt->second.totalInternalClimax.got += gotInternal;
 
@@ -1161,14 +1190,14 @@ namespace LL {
                 if (partnerIt != _store.end()) {
                     // Update partner's totals
                     partnerIt->second.exclusiveSex += sexTimes;
-                    partnerIt->second.lastTime = std::max(partnerIt->second.lastTime, lastTime);
+                    partnerIt->second.lastTime = lastTime;
                     partnerIt->second.totalInternalClimax.did += gotInternal;
                     partnerIt->second.totalInternalClimax.got += didInternal;
 
                     SKSE::log::debug(
                         "  Created reciprocal relationship for partner 0x{:X} -> NPC 0x{:X}, sexTimes:{}, "
-                        "didInternal:{}, gotInternal:{}",
-                        loverFormID, npcFormID, sexTimes, gotInternal, didInternal);
+                        "didInternal:{}, gotInternal:{}, loverLastTime:{}",
+                        loverFormID, npcFormID, sexTimes, gotInternal, didInternal, lastTime);
                 }
             } else {
                 SKSE::log::debug("  Partner 0x{:X} already has NPC 0x{:X} as lover, skipping reciprocal creation",
