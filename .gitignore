@@ -21,3 +21,4 @@ cmake-build*/
 *.suo
 *.userosscache
 *.sln.docstates
+tag-push.bat
