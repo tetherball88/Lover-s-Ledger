@@ -76,6 +76,7 @@ Notes on property paths: several functions accept dot-separated property paths (
 
   - Skyrim Special Edition
   - SKSE (matching game version)
+  - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
   - SexLab (optional — the project includes a stub `TTLL_SexlabIntegration.psc` for custom integration)
   - RelationsFinder (optional) to auto-seed relationships
@@ -117,3 +118,4 @@ Notes on property paths: several functions accept dot-separated property paths (
     - Improve logging across Papyrus bindings and core services
 
   - v0.0.1: initial release
+
