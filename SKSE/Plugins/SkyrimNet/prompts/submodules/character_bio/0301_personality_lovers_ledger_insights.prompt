@@ -1,0 +1,4 @@
+
+{% if (render_mode == "full" or render_mode == "ttll_insights") and not decnpc(actorUUID).isVirtual %}
+    {{ttll_get_npc_sexual_behavior(actorUUID)}}
+{% endif %}

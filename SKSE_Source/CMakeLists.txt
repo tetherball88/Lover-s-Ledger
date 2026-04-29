@@ -14,19 +14,9 @@ project(LoversLedger VERSION 0.0.1 LANGUAGES CXX)
 #
 # To do this automatically, set the `SKYRIM_FOLDER` environment variable
 # to the path of your Skyrim Special Edition folder
-set(MOD_FOLDER_NAME "TT Lover's Ledger")
-# set(SKYRIM_MODS_FOLDER "C:\\path\\to\\your\\mods\\folder")
-
-# If you're using Mod Organizer 2 or Vortex, you might want this to go inside
-# of your "mods" folder, inside of a subfolder named "<your mod>".
-#
-# To do this automatically, set the `SKYRIM_MODS_FOLDER` environment variable
-# to the path of your "mods" folder
-if(DEFINED ENV{SKYRIM_MODS_FOLDER} AND IS_DIRECTORY "$ENV{SKYRIM_MODS_FOLDER}")
-    set(OUTPUT_FOLDER "$ENV{SKYRIM_MODS_FOLDER}/${MOD_FOLDER_NAME}")
-elseif(DEFINED SKYRIM_MODS_FOLDER AND IS_DIRECTORY "${SKYRIM_MODS_FOLDER}")
-    set(OUTPUT_FOLDER "${SKYRIM_MODS_FOLDER}/${MOD_FOLDER_NAME}")
-endif()
+set(MOD_FOLDER_NAME "Lovers Ledger Dev")
+set(SKYRIM_MODS_FOLDER "E:\\Skyrim\\development\\mods")
+set(OUTPUT_FOLDER "${SKYRIM_MODS_FOLDER}/${MOD_FOLDER_NAME}")
 
 set(CommonLibPath "extern/CommonLibSSE-NG")
 set(CommonLibName "CommonLibSSE")
@@ -46,6 +36,12 @@ else ()
         )
 endif()
 
+find_path(RAPIDCSV_INCLUDE_DIRS
+    NAMES rapidcsv.h
+    PATH_SUFFIXES rapidcsv
+    REQUIRED
+)
+
 include("${CommonLibPath}/cmake/CommonLibSSE.cmake")
 
 # Otherwise, you can set OUTPUT_FOLDER to any place you'd like :)
@@ -53,6 +49,7 @@ include("${CommonLibPath}/cmake/CommonLibSSE.cmake")
 
 # Setup your SKSE plugin as an SKSE plugin!
 # find_package(CommonLibSSE CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # Collect all source files
 file(GLOB_RECURSE SOURCES
@@ -64,33 +61,21 @@ file(GLOB_RECURSE SOURCES
 # add_library(${PROJECT_NAME} SHARED ${SOURCES})
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23) # <--- use C++23 standard
-# Ensure project root, src/, and include/ are on the include path so files can include headers by name
-target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/include)
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h) # <--- PCH.h is required!
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+    nlohmann_json::nlohmann_json
+    ${CommonLibName}::${CommonLibName}
+)
 
 # Add include directories
 target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # Silence Microsoft STL deprecation warnings
 target_compile_definitions(${PROJECT_NAME} PRIVATE _SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING)
-
-# Workaround for MSBuild 17.14 bug: create props file to override ATL_KeyFile
-if(MSVC)
-    set(PROPS_FILE "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.props")
-    file(WRITE "${PROPS_FILE}" "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n")
-    file(APPEND "${PROPS_FILE}" "<Project xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">\n")
-    file(APPEND "${PROPS_FILE}" "  <PropertyGroup>\n")
-    file(APPEND "${PROPS_FILE}" "    <!-- Override ATL_KeyFile to empty to bypass MSBuild 17.14 bug -->\n")
-    file(APPEND "${PROPS_FILE}" "    <ATL_KeyFile></ATL_KeyFile>\n")
-    file(APPEND "${PROPS_FILE}" "  </PropertyGroup>\n")
-    file(APPEND "${PROPS_FILE}" "</Project>\n")
-
-    # Tell Visual Studio to import our props file (use relative path to avoid space issues)
-    set_target_properties(${PROJECT_NAME} PROPERTIES VS_USER_PROPS "${PROJECT_NAME}.props")
-endif()
 
 # Force static linking of runtime library to reduce dependencies
 if(MSVC)

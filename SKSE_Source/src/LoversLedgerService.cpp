@@ -181,49 +181,74 @@ namespace LL {
         WriteData(a_intfc, exclusiveSex, "NPCData.exclusiveSex");
         WriteData(a_intfc, groupSex, "NPCData.groupSex");
         WriteData(a_intfc, lastTime, "NPCData.lastTime");
-        WriteData(a_intfc, relationshipsInitialized, "NPCData.relationshipsInitialized");
-        WriteData(a_intfc, existingRelationsScan, "NPCData.existingRelationsScan");
         totalInternalClimax.Save(a_intfc);
 
         SaveStringIntMap(a_intfc, actions_did, "NPCData.actions_did");
         SaveStringIntMap(a_intfc, actions_got, "NPCData.actions_got");
 
-        // Save lovers
+        // Save lovers (keys are TESNPC base FormIDs in v2)
         std::uint32_t loversCount = static_cast<std::uint32_t>(lovers.size());
         WriteData(a_intfc, loversCount, "NPCData.lovers count");
         for (const auto& [loverID, loverData] : lovers) {
             loverData.Save(a_intfc, loverID);
         }
+
+        // v2: othersCount (non-unique partner encounter tally)
+        WriteData(a_intfc, othersCount, "NPCData.othersCount");
     }
 
-    bool NPCData::Load(SKSE::SerializationInterface* a_intfc) {
+    bool NPCData::Load(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        SKSE::log::trace("NPCData::Load: reading basic fields (version={})", version);
+
         if (!ReadData(a_intfc, sameSexEncounter, "NPCData.sameSexEncounter") ||
             !ReadData(a_intfc, soloSex, "NPCData.soloSex") ||
             !ReadData(a_intfc, exclusiveSex, "NPCData.exclusiveSex") ||
-            !ReadData(a_intfc, groupSex, "NPCData.groupSex") || !ReadData(a_intfc, lastTime, "NPCData.lastTime") ||
-            !ReadData(a_intfc, relationshipsInitialized, "NPCData.relationshipsInitialized")) {
+            !ReadData(a_intfc, groupSex, "NPCData.groupSex") ||
+            !ReadData(a_intfc, lastTime, "NPCData.lastTime")) {
             return false;
         }
 
-        // Try to read existingRelationsScan if available (for backwards compatibility)
-        if (!ReadData(a_intfc, existingRelationsScan, "NPCData.existingRelationsScan")) {
-            existingRelationsScan = false;
+        // v1 had 'relationshipsInitialized' + 'existingRelationsScan' bools here; discard both.
+        if (version == 1) {
+            bool discarded1 = false, discarded2 = false;
+            if (!ReadData(a_intfc, discarded1, "NPCData.relationshipsInitialized (v1 legacy skip)") ||
+                !ReadData(a_intfc, discarded2, "NPCData.existingRelationsScan (v1 legacy skip)")) {
+                SKSE::log::warn("NPCData::Load: failed to skip v1 legacy bool fields");
+                return false;
+            }
+            SKSE::log::trace("NPCData::Load: skipped v1 legacy bools relInit={}, existingScan={}", discarded1, discarded2);
         }
+
+        SKSE::log::trace("NPCData::Load: basic fields ok — sameSex={}, solo={}, excl={}, group={}, lastTime={}",
+                         sameSexEncounter, soloSex, exclusiveSex, groupSex, lastTime);
 
         if (!totalInternalClimax.Load(a_intfc)) {
+            SKSE::log::error("NPCData::Load: failed to read totalInternalClimax");
             return false;
         }
 
-        if (!LoadStringIntMap(a_intfc, actions_did, "NPCData.actions_did") ||
-            !LoadStringIntMap(a_intfc, actions_got, "NPCData.actions_got")) {
+        SKSE::log::trace("NPCData::Load: totalInternalClimax ok — did={}, got={}",
+                         totalInternalClimax.did, totalInternalClimax.got);
+
+        if (!LoadStringIntMap(a_intfc, actions_did, "NPCData.actions_did")) {
+            SKSE::log::error("NPCData::Load: failed to read actions_did");
             return false;
         }
+        SKSE::log::trace("NPCData::Load: actions_did ok ({} entries)", actions_did.size());
+
+        if (!LoadStringIntMap(a_intfc, actions_got, "NPCData.actions_got")) {
+            SKSE::log::error("NPCData::Load: failed to read actions_got");
+            return false;
+        }
+        SKSE::log::trace("NPCData::Load: actions_got ok ({} entries)", actions_got.size());
 
         // Load lovers
         std::uint32_t loversCount = 0;
         if (!ReadData(a_intfc, loversCount, "NPCData.lovers count")) {
+            SKSE::log::error("NPCData::Load: failed to read lovers count");
             return false;
         }
+        SKSE::log::trace("NPCData::Load: loading {} lovers (version={})", loversCount, version);
 
         lovers.clear();
         for (std::uint32_t i = 0; i < loversCount; ++i) {
@@ -232,23 +257,39 @@ namespace LL {
                 return false;
             }
 
-            // Resolve formID after load
-            std::uint32_t resolvedLoverID = 0;
-            if (!a_intfc->ResolveFormID(loverFormID, resolvedLoverID)) {
-                SKSE::log::warn("Failed to resolve lover formID 0x{:X}, skipping", loverFormID);
-                // Skip this lover's data
-                LoverData tempData;
-                if (!tempData.Load(a_intfc)) {
+            if (version >= 2) {
+                // v2: keys are TESNPC base FormIDs — resolve via plugin load order remapping
+                std::uint32_t resolvedLoverID = 0;
+                if (!a_intfc->ResolveFormID(loverFormID, resolvedLoverID)) {
+                    SKSE::log::warn("Failed to resolve lover base FormID 0x{:X}, skipping", loverFormID);
+                    LoverData tempData;
+                    if (!tempData.Load(a_intfc)) {
+                        return false;
+                    }
+                    continue;
+                }
+                LoverData loverData;
+                if (!loverData.Load(a_intfc)) {
                     return false;
                 }
-                continue;
+                lovers[resolvedLoverID] = loverData;
+            } else {
+                // v1: keys are raw Actor refFormIDs — store as-is; migration will resolve them later
+                LoverData loverData;
+                if (!loverData.Load(a_intfc)) {
+                    return false;
+                }
+                lovers[loverFormID] = loverData;
             }
+        }
 
-            LoverData loverData;
-            if (!loverData.Load(a_intfc)) {
-                return false;
+        // v2: read othersCount
+        if (version >= 2) {
+            if (!ReadData(a_intfc, othersCount, "NPCData.othersCount")) {
+                othersCount = 0;  // graceful fallback if field missing
             }
-            lovers[resolvedLoverID] = loverData;
+        } else {
+            othersCount = 0;
         }
 
         return true;
@@ -266,28 +307,25 @@ namespace LL {
     NPCData& LoversLedgerService::EnsureNPC(std::uint32_t formID) {
         // Caller must hold unique_lock
 
-        auto& npcData = _store[formID];
-
-        // Check if we need to scan existing relationships
-        if (!npcData.existingRelationsScan) {
-            if (_relationsFinderAPI) {
-                try {
-                    SKSE::log::info("Scanning existing relationships for NPC 0x{:X}", formID);
-                    npcData.existingRelationsScan = true;
-                    ScanExistingRelationships(formID, npcData);
-
-                    SKSE::log::info("Scan completed successfully for NPC 0x{:X}", formID);
-                } catch (const std::exception& e) {
-                    SKSE::log::error("Exception during scan for NPC 0x{:X}: {}", formID, e.what());
-                    npcData.existingRelationsScan = true;  // Mark as scanned to prevent retry
-                } catch (...) {
-                    SKSE::log::error("Unknown exception during scan for NPC 0x{:X}", formID);
-                    npcData.existingRelationsScan = true;  // Mark as scanned to prevent retry
+        // Lazy migration preamble: if any legacy entry's actor resolves to this base FormID, migrate it now.
+        // Handles the "comes back into range" case for v1 → v2 migration.
+        if (!_legacyStore.empty()) {
+            for (auto legacyIt = _legacyStore.begin(); legacyIt != _legacyStore.end(); ) {
+                auto* legacyForm = RE::TESForm::LookupByID(legacyIt->first);
+                auto* legacyActor = legacyForm ? legacyForm->As<RE::Actor>() : nullptr;
+                if (legacyActor) {
+                    auto* legacyBase = legacyActor->GetActorBase();
+                    if (legacyBase && legacyBase->GetFormID() == formID) {
+                        MigrateOneLegacyEntry(legacyIt->first, legacyIt->second);
+                        legacyIt = _legacyStore.erase(legacyIt);
+                        continue;
+                    }
                 }
-            } else {
-                SKSE::log::warn("EnsureNPC: RelationsFinder API not available yet for NPC 0x{:X}", formID);
+                ++legacyIt;
             }
         }
+
+        auto& npcData = _store[formID];
 
         return npcData;
     }
@@ -296,6 +334,171 @@ namespace LL {
         // Caller must hold shared_lock or unique_lock
         auto it = _store.find(formID);
         return (it != _store.end()) ? &it->second : nullptr;
+    }
+
+    bool LoversLedgerService::MigrateOneLegacyEntry(std::uint32_t npcRefFormID, NPCData& legacyData) {
+        // Caller must hold unique_lock.
+        // Returns true  → remove this entry from _legacyStore.
+        // Returns false → keep entry (NPC or at least one lover still deferred).
+
+        // --- Classify the NPC itself ---
+        auto* npcForm = RE::TESForm::LookupByID(npcRefFormID);
+        auto* npcActor = npcForm ? npcForm->As<RE::Actor>() : nullptr;
+
+        if (!npcActor) {
+            if (IsTempFormID(npcRefFormID)) {
+                // Temp actor (0xFF prefix) — definitely non-unique, silently drop
+                SKSE::log::trace("MigrateOneLegacyEntry: 0x{:X} is a temp formID, dropping", npcRefFormID);
+                return true;
+            }
+            // Persistent ref but cell not loaded — defer
+            return false;
+        }
+
+        auto* npcBase = npcActor->GetActorBase();
+        if (!npcBase) {
+            SKSE::log::warn("MigrateOneLegacyEntry: NPC 0x{:X} has no ActorBase, dropping", npcRefFormID);
+            return true;
+        }
+
+        if (!npcBase->IsUnique()) {
+            // Non-unique subject (bandit, generic NPC) — no per-NPC stats preserved
+            SKSE::log::trace("MigrateOneLegacyEntry: NPC 0x{:X} ({}) is non-unique, dropping",
+                             npcRefFormID, npcBase->GetName());
+            return true;
+        }
+
+        const std::uint32_t npcBaseFormID = npcBase->GetFormID();
+
+        // --- Migrate NPC-level stats (merge: take the larger value to avoid overwriting newer data) ---
+        auto& dest = _store[npcBaseFormID];
+        dest.sameSexEncounter     = std::max(dest.sameSexEncounter,     legacyData.sameSexEncounter);
+        dest.soloSex              = std::max(dest.soloSex,              legacyData.soloSex);
+        dest.exclusiveSex         = std::max(dest.exclusiveSex,         legacyData.exclusiveSex);
+        dest.groupSex             = std::max(dest.groupSex,             legacyData.groupSex);
+        dest.lastTime             = std::max(dest.lastTime,             legacyData.lastTime);
+        dest.totalInternalClimax.did = std::max(dest.totalInternalClimax.did, legacyData.totalInternalClimax.did);
+        dest.totalInternalClimax.got = std::max(dest.totalInternalClimax.got, legacyData.totalInternalClimax.got);
+        for (auto& [action, count] : legacyData.actions_did) {
+            dest.actions_did[action] = std::max(dest.actions_did[action], count);
+        }
+        for (auto& [action, count] : legacyData.actions_got) {
+            dest.actions_got[action] = std::max(dest.actions_got[action], count);
+        }
+        // --- Classify each lover ---
+        int loversDeferred = 0;
+        for (auto& [loverRefFormID, loverData] : legacyData.lovers) {
+            auto* loverForm = RE::TESForm::LookupByID(loverRefFormID);
+            auto* loverActor = loverForm ? loverForm->As<RE::Actor>() : nullptr;
+
+            if (loverActor) {
+                auto* loverBase = loverActor->GetActorBase();
+                if (loverBase && loverBase->IsUnique()) {
+                    // Unique lover — merge into dest.lovers
+                    const std::uint32_t loverBaseFormID = loverBase->GetFormID();
+                    auto& destLover = dest.lovers[loverBaseFormID];
+                    destLover.exclusiveSex       = std::max(destLover.exclusiveSex,       loverData.exclusiveSex);
+                    destLover.partOfSameGroupSex = std::max(destLover.partOfSameGroupSex,  loverData.partOfSameGroupSex);
+                    destLover.lastTime           = std::max(destLover.lastTime,            loverData.lastTime);
+                    destLover.orgasms            = std::max(destLover.orgasms,             loverData.orgasms);
+                    destLover.internalClimax.did = std::max(destLover.internalClimax.did,  loverData.internalClimax.did);
+                    destLover.internalClimax.got = std::max(destLover.internalClimax.got,  loverData.internalClimax.got);
+                } else {
+                    // Non-unique lover — fold into othersCount
+                    dest.othersCount += loverData.exclusiveSex + loverData.partOfSameGroupSex;
+                }
+            } else if (IsTempFormID(loverRefFormID)) {
+                // Temp lover — definitely non-unique, fold into othersCount
+                dest.othersCount += loverData.exclusiveSex + loverData.partOfSameGroupSex;
+            } else {
+                // Persistent ref but cell not loaded — move to dest.legacyLovers for lazy drain
+                dest.legacyLovers[loverRefFormID] = loverData;
+                ++loversDeferred;
+            }
+        }
+
+        // NPC is always considered migrated once it resolves as unique;
+        // any unresolved lovers now live in dest.legacyLovers and drain lazily.
+        SKSE::log::trace("MigrateOneLegacyEntry: NPC 0x{:X} → base 0x{:X} migrated ({} lover(s) deferred to legacyLovers)",
+                         npcRefFormID, npcBaseFormID, loversDeferred);
+        return true;
+    }
+
+    void LoversLedgerService::TryMigrateLegacyStore() {
+        std::unique_lock lock(_mutex);
+
+        if (_legacyStore.empty()) {
+            return;
+        }
+
+        SKSE::log::info("TryMigrateLegacyStore: {} legacy entries to process", _legacyStore.size());
+
+        int migrated = 0;
+        int dropped  = 0;
+        int deferred = 0;
+
+        for (auto it = _legacyStore.begin(); it != _legacyStore.end(); ) {
+            bool remove = MigrateOneLegacyEntry(it->first, it->second);
+            if (remove) {
+                // Determine whether it was migrated or just dropped (temp/non-unique)
+                auto* f = RE::TESForm::LookupByID(it->first);
+                auto* a = f ? f->As<RE::Actor>() : nullptr;
+                bool wasUnique = a && a->GetActorBase() && a->GetActorBase()->IsUnique();
+                if (wasUnique) ++migrated; else ++dropped;
+                it = _legacyStore.erase(it);
+            } else {
+                ++deferred;
+                ++it;
+            }
+        }
+
+        SKSE::log::info("TryMigrateLegacyStore: migrated={}, dropped={}, deferred={}, remaining legacy={}",
+                        migrated, dropped, deferred, _legacyStore.size());
+
+        // Second pass: drain legacyLovers in already-migrated store entries
+        int legacyLoversDrained  = 0;
+        int legacyLoversDeferred = 0;
+        for (auto& [npcBaseFormID, npcData] : _store) {
+            if (npcData.legacyLovers.empty()) continue;
+
+            for (auto loverIt = npcData.legacyLovers.begin(); loverIt != npcData.legacyLovers.end(); ) {
+                const std::uint32_t loverRefFormID = loverIt->first;
+                const LoverData& loverData = loverIt->second;
+
+                auto* loverForm = RE::TESForm::LookupByID(loverRefFormID);
+                auto* loverActor = loverForm ? loverForm->As<RE::Actor>() : nullptr;
+
+                if (loverActor) {
+                    auto* loverBase = loverActor->GetActorBase();
+                    if (loverBase && loverBase->IsUnique()) {
+                        const std::uint32_t loverBaseFormID = loverBase->GetFormID();
+                        auto& destLover = npcData.lovers[loverBaseFormID];
+                        destLover.exclusiveSex       = std::max(destLover.exclusiveSex,       loverData.exclusiveSex);
+                        destLover.partOfSameGroupSex = std::max(destLover.partOfSameGroupSex,  loverData.partOfSameGroupSex);
+                        destLover.lastTime           = std::max(destLover.lastTime,            loverData.lastTime);
+                        destLover.orgasms            = std::max(destLover.orgasms,             loverData.orgasms);
+                        destLover.internalClimax.did = std::max(destLover.internalClimax.did,  loverData.internalClimax.did);
+                        destLover.internalClimax.got = std::max(destLover.internalClimax.got,  loverData.internalClimax.got);
+                    } else {
+                        npcData.othersCount += loverData.exclusiveSex + loverData.partOfSameGroupSex;
+                    }
+                    ++legacyLoversDrained;
+                    loverIt = npcData.legacyLovers.erase(loverIt);
+                } else if (IsTempFormID(loverRefFormID)) {
+                    npcData.othersCount += loverData.exclusiveSex + loverData.partOfSameGroupSex;
+                    ++legacyLoversDrained;
+                    loverIt = npcData.legacyLovers.erase(loverIt);
+                } else {
+                    ++legacyLoversDeferred;
+                    ++loverIt;
+                }
+            }
+        }
+
+        if (legacyLoversDrained > 0 || legacyLoversDeferred > 0) {
+            SKSE::log::info("TryMigrateLegacyStore: legacy lovers drained={}, still deferred={}",
+                            legacyLoversDrained, legacyLoversDeferred);
+        }
     }
 
     void LoversLedgerService::UpdateActions(std::uint32_t npcFormID, const std::vector<std::string>& actions,
@@ -459,7 +662,8 @@ namespace LL {
                 {"samesexencounter", [](const NPCData& n) { return n.sameSexEncounter; }},
                 {"solosex", [](const NPCData& n) { return n.soloSex; }},
                 {"exclusivesex", [](const NPCData& n) { return n.exclusiveSex; }},
-                {"groupsex", [](const NPCData& n) { return n.groupSex; }}};
+                {"groupsex", [](const NPCData& n) { return n.groupSex; }},
+                {"otherscount", [](const NPCData& n) { return n.othersCount; }}};
 
             auto it = intGetters.find(parts[0]);
             if (it == intGetters.end()) {
@@ -893,7 +1097,17 @@ namespace LL {
     void LoversLedgerService::ClearAll() {
         std::unique_lock lock(_mutex);
         _store.clear();
+        _legacyStore.clear();
+        _globalRelationsScanDone = false;
         SKSE::log::info("LoversLedgerService: All data cleared");
+    }
+
+    void LoversLedgerService::UpdateOthers(std::uint32_t npcBaseFormID) {
+        if (npcBaseFormID == 0) return;
+        std::unique_lock lock(_mutex);
+        auto& npc = EnsureNPC(npcBaseFormID);
+        ++npc.othersCount;
+        SKSE::log::trace("UpdateOthers: npc base=0x{:X}, othersCount now {}", npcBaseFormID, npc.othersCount);
     }
 
     std::pair<int, int> LoversLedgerService::CleanupInvalidFormIDs() {
@@ -904,157 +1118,149 @@ namespace LL {
 
         SKSE::log::info("CleanupInvalidFormIDs: Starting cleanup...");
 
-        // First pass: remove invalid NPCs
+        // Helper: validate a base FormID as a unique TESNPC (base forms are always resident,
+        // so a null lookup or non-unique result means the entry is corrupt/stale)
+        auto isValidUniqueBase = [](std::uint32_t baseFormID) -> bool {
+            auto* form = RE::TESForm::LookupByID(baseFormID);
+            if (!form) return false;
+            auto* npc = form->As<RE::TESNPC>();
+            return npc && npc->IsUnique();
+        };
+
+        // Pass 1: remove invalid NPC entries from _store
         std::vector<std::uint32_t> npcsToRemove;
         for (const auto& [npcFormID, npcData] : _store) {
-            auto* form = RE::TESForm::LookupByID(npcFormID);
-            if (!form || !form->As<RE::Actor>()) {
+            if (!isValidUniqueBase(npcFormID)) {
                 npcsToRemove.push_back(npcFormID);
             }
         }
-
         for (auto npcFormID : npcsToRemove) {
             _store.erase(npcFormID);
-            npcsRemoved++;
-            SKSE::log::debug("  Removed invalid NPC FormID 0x{:X}", npcFormID);
+            ++npcsRemoved;
+            SKSE::log::debug("  Removed invalid NPC base FormID 0x{:X}", npcFormID);
         }
 
-        // Second pass: remove invalid lovers from remaining NPCs
+        // Pass 2: remove invalid lover entries from remaining _store NPCs
         for (auto& [npcFormID, npcData] : _store) {
             std::vector<std::uint32_t> loversToRemove;
-
             for (const auto& [loverFormID, loverData] : npcData.lovers) {
-                auto* form = RE::TESForm::LookupByID(loverFormID);
-                if (!form || !form->As<RE::Actor>()) {
+                if (!isValidUniqueBase(loverFormID)) {
                     loversToRemove.push_back(loverFormID);
                 }
             }
-
             for (auto loverFormID : loversToRemove) {
                 npcData.lovers.erase(loverFormID);
-                loversRemoved++;
-                SKSE::log::debug("  Removed invalid lover FormID 0x{:X} from NPC 0x{:X}", loverFormID, npcFormID);
+                ++loversRemoved;
+                SKSE::log::debug("  Removed invalid lover base FormID 0x{:X} from NPC 0x{:X}", loverFormID, npcFormID);
             }
         }
 
-        SKSE::log::info("CleanupInvalidFormIDs: Cleanup complete - {} NPCs removed, {} lovers removed",
-                       npcsRemoved, loversRemoved);
+        // Pass 3: purge temp (0xFF) entries from _legacyStore — these can never be migrated
+        std::vector<std::uint32_t> legacyToRemove;
+        for (const auto& [refFormID, legacyData] : _legacyStore) {
+            if (IsTempFormID(refFormID)) {
+                legacyToRemove.push_back(refFormID);
+            }
+        }
+        for (auto refFormID : legacyToRemove) {
+            _legacyStore.erase(refFormID);
+            SKSE::log::debug("  Purged temp legacy NPC ref FormID 0x{:X}", refFormID);
+        }
+
+        SKSE::log::info("CleanupInvalidFormIDs: Cleanup complete - {} NPCs removed, {} lovers removed, {} temp legacy entries purged",
+                       npcsRemoved, loversRemoved, static_cast<int>(legacyToRemove.size()));
 
         return {npcsRemoved, loversRemoved};
     }
 
-    void LoversLedgerService::SetRelationsFinderAPI(
-        RelationsFinderAPI::GetNpcRelationshipsCallbackFn apiFunc) noexcept {
-        _relationsFinderAPI = apiFunc;
-        SKSE::log::info("LoversLedgerService: RelationsFinder API set (ptr: {})", fmt::ptr(apiFunc));
-    }
+    void LoversLedgerService::ScanAllGameRelationships() {
+        std::unique_lock lock(_mutex);
 
-    void LoversLedgerService::ScanExistingRelationships(std::uint32_t npcFormID, [[maybe_unused]] NPCData& npcData) {
-        // IMPORTANT: This method is called from EnsureNPC, which already holds a unique_lock on _mutex
-        // Do NOT acquire the lock again here to avoid deadlock
-        // We re-lookup npcData from _store after each lover creation to handle potential map rehashing
-
-        if (!_relationsFinderAPI) {
-            SKSE::log::warn("ScanExistingRelationships: RelationsFinder API not available");
+        if (_globalRelationsScanDone) {
+            SKSE::log::info("ScanAllGameRelationships: Already completed for this playthrough, skipping.");
             return;
         }
 
-        // Get the actor from the formID
-        RE::TESForm* npcForm = RE::TESForm::LookupByID(npcFormID);
-        if (!npcForm) {
-            SKSE::log::warn("ScanExistingRelationships: Failed to lookup form 0x{:X}", npcFormID);
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!dataHandler) {
+            SKSE::log::error("ScanAllGameRelationships: TESDataHandler not available.");
             return;
         }
 
-        RE::Actor* npc = npcForm->As<RE::Actor>();
-        if (!npc) {
-            SKSE::log::warn("ScanExistingRelationships: Form 0x{:X} is not an actor", npcFormID);
-            return;
+        constexpr std::uint32_t kAssocSpouse   = 0x000142CA;
+        constexpr std::uint32_t kAssocCourting = 0x0001EE23;
+
+        const auto& relForms = dataHandler->GetFormArray<RE::BGSRelationship>();
+        SKSE::log::info("ScanAllGameRelationships: Examining {} BGSRelationship forms...", relForms.size());
+
+        int examined = 0;
+        int seeded   = 0;
+        int skipped  = 0;
+
+        for (auto* relForm : relForms) {
+            if (!relForm) continue;
+            ++examined;
+
+            RE::TESNPC* npc1 = relForm->npc1;
+            RE::TESNPC* npc2 = relForm->npc2;
+            if (!npc1 || !npc2) continue;
+            if (!npc1->IsUnique() || !npc2->IsUnique()) continue;
+
+            const std::uint32_t id1 = npc1->GetFormID();
+            const std::uint32_t id2 = npc2->GetFormID();
+            if (id1 == 0 || id2 == 0 || id1 == id2) continue;
+
+            // Classify the relationship
+            bool isSpouse   = false;
+            bool isCourting = false;
+            bool isLover    = false;
+
+            if (relForm->assocType) {
+                const std::uint32_t assocID = relForm->assocType->GetFormID();
+                if (assocID == kAssocSpouse)   isSpouse   = true;
+                else if (assocID == kAssocCourting) isCourting = true;
+            }
+
+            if (!isSpouse && !isCourting &&
+                relForm->level == RE::BGSRelationship::RELATIONSHIP_LEVEL::kLover) {
+                isLover = true;
+            }
+
+            if (!isSpouse && !isCourting && !isLover) continue;
+
+            // Skip if the pair is already in the ledger (either direction already seeded)
+            auto it1 = _store.find(id1);
+            if (it1 != _store.end() && it1->second.lovers.count(id2) > 0) {
+                ++skipped;
+                continue;
+            }
+            auto it2 = _store.find(id2);
+            if (it2 != _store.end() && it2->second.lovers.count(id1) > 0) {
+                ++skipped;
+                continue;
+            }
+
+            // Ensure npc1 is in the store — CreateExistingLoverInternal requires it.
+            // (CreateExistingLoverInternal handles creating npc2's entry itself.)
+            if (_store.find(id1) == _store.end()) {
+                _store[id1] = NPCData{};
+            }
+
+            // Seed both sides (CreateExistingLoverInternal handles the reciprocal entry)
+            CreateExistingLoverInternal(id1, id2, isSpouse, isCourting, isLover);
+            ++seeded;
         }
 
-        // Skip scanning if this is the player
-        if (npc->IsPlayerRef()) {
-            SKSE::log::info("ScanExistingRelationships: Skipping scan for player");
-            return;
-        }
-
-        const char* npcName = npc->GetName();
-        SKSE::log::info("ScanExistingRelationships: Scanning relationships for NPC 0x{:X} ({})", npcFormID,
-                        npcName ? npcName : "Unknown");
-
-        // Collect all lover FormIDs using callback API (safe across DLLs)
-        std::vector<std::pair<std::uint32_t, int>> loversToCreate;  // <formID, type: 0=spouse, 1=courting, 2=lover>
-
-        // Callback lambda to collect spouse FormIDs
-        auto collectSpouses = [](RE::Actor* actor, void* userData) {
-            if (actor) {
-                auto* lovers = static_cast<std::vector<std::pair<std::uint32_t, int>>*>(userData);
-                lovers->emplace_back(actor->GetFormID(), 0);  // 0 = spouse
-            }
-        };
-
-        // Query spouses (associationType = "Spouse", minRank = 0)
-        _relationsFinderAPI(npc, "Spouse", "any", -4, -999, collectSpouses, &loversToCreate);
-        SKSE::log::info("  Found {} spouses", loversToCreate.size());
-
-        // Callback lambda to collect courting relationships
-        auto collectCourting = [](RE::Actor* actor, void* userData) {
-            if (actor) {
-                auto* lovers = static_cast<std::vector<std::pair<std::uint32_t, int>>*>(userData);
-                lovers->emplace_back(actor->GetFormID(), 1);  // 1 = courting
-            }
-        };
-
-        // Query courting relationships (associationType = "PotentialMarriageFaction", minRank = 0)
-        size_t beforeCourting = loversToCreate.size();
-        _relationsFinderAPI(npc, "courting", "any", -4, -999, collectCourting, &loversToCreate);
-        SKSE::log::info("  Found {} courting relationships", loversToCreate.size() - beforeCourting);
-
-        // Callback lambda to collect lovers
-        auto collectLovers = [](RE::Actor* actor, void* userData) {
-            if (actor) {
-                auto* lovers = static_cast<std::vector<std::pair<std::uint32_t, int>>*>(userData);
-                lovers->emplace_back(actor->GetFormID(), 2);  // 2 = lover
-            }
-        };
-
-        // Query lovers (any relationship rank >= 3, which corresponds to "Lover" in the enum)
-        size_t beforeLovers = loversToCreate.size();
-        _relationsFinderAPI(npc, "", "any", 4, 4, collectLovers, &loversToCreate);
-        SKSE::log::info("  Found {} lover relationships", loversToCreate.size() - beforeLovers);
-
-        // Now create all lovers - this avoids passing npcData reference which could be invalidated
-        if (!loversToCreate.empty()) {
-            // Re-lookup and reserve space in lovers map to minimize rehashing
-            auto it = _store.find(npcFormID);
-            if (it != _store.end()) {
-                it->second.lovers.reserve(it->second.lovers.size() + loversToCreate.size());
-            }
-        }
-
-        for (const auto& [loverFormID, type] : loversToCreate) {
-            // Re-lookup npcData each time to avoid invalidation
-            auto it = _store.find(npcFormID);
-            if (it == _store.end()) {
-                SKSE::log::error("NPC 0x{:X} disappeared from store!", npcFormID);
-                return;
-            }
-
-            if (it->second.lovers.find(loverFormID) == it->second.lovers.end()) {
-                bool isSpouse = (type == 0);
-                bool isCourting = (type == 1);
-                bool isLover = (type == 2);
-                CreateExistingLoverInternal(npcFormID, loverFormID, isSpouse, isCourting, isLover);
-            }
-        }
-
-        SKSE::log::info("ScanExistingRelationships: Scan complete for NPC 0x{:X}", npcFormID);
+        _globalRelationsScanDone = true;
+        SKSE::log::info(
+            "ScanAllGameRelationships: Done — examined={}, seeded={} pair(s), skipped={} (already in ledger).",
+            examined, seeded, skipped);
     }
 
     void LoversLedgerService::CreateExistingLoverInternal(std::uint32_t npcFormID, std::uint32_t loverFormID,
                                                           bool isSpouse, bool isCourting, bool isLover) {
-        // IMPORTANT: Called from ScanExistingRelationships which is called from EnsureNPC (holds unique_lock)
-        // Do NOT acquire lock here
+        // IMPORTANT: Called from ScanAllGameRelationships which holds a unique_lock on _mutex.
+        // Do NOT acquire the lock here.
 
         SKSE::log::debug("CreateExistingLoverInternal: START - NPC 0x{:X}, Lover 0x{:X}", npcFormID, loverFormID);
 
@@ -1228,6 +1434,13 @@ namespace LL {
             return;
         }
 
+        // v2: persist the global relationship scan flag so the scan does not
+        // repeat on subsequent loads of the same playthrough.
+        if (!a_intfc->WriteRecordData(&_globalRelationsScanDone, sizeof(_globalRelationsScanDone))) {
+            SKSE::log::error("Failed to write _globalRelationsScanDone");
+            return;
+        }
+
         if (!a_intfc->WriteRecordData(&numNPCs, sizeof(numNPCs))) {
             SKSE::log::error("Failed to write NPC count");
             return;
@@ -1252,9 +1465,19 @@ namespace LL {
                 continue;
             }
 
-            if (version != kSerializationVersion) {
+            if (version != 1 && version != 2) {
                 SKSE::log::error("Unsupported serialization version: {}", version);
                 continue;
+            }
+
+            // v2+: read the global relationship scan flag
+            bool globalScanDone = false;
+            if (version >= 2) {
+                std::uint32_t readBytes2 = a_intfc->ReadRecordData(&globalScanDone, sizeof(globalScanDone));
+                if (readBytes2 != sizeof(globalScanDone)) {
+                    SKSE::log::warn("Failed to read _globalRelationsScanDone, defaulting to false");
+                    globalScanDone = false;
+                }
             }
 
             std::uint32_t numNPCs = 0;
@@ -1264,11 +1487,14 @@ namespace LL {
                 continue;
             }
 
-            SKSE::log::info("Loading {} NPC records", numNPCs);
+            SKSE::log::info("Loading {} NPC records (format version {})", numNPCs, version);
 
             {
                 std::unique_lock lock(_mutex);
                 _store.clear();
+                _legacyStore.clear();
+                _globalRelationsScanDone = globalScanDone;
+                SKSE::log::info("Loaded _globalRelationsScanDone={}", _globalRelationsScanDone);
 
                 for (std::uint32_t i = 0; i < numNPCs; ++i) {
                     std::uint32_t npcFormID = 0;
@@ -1278,37 +1504,37 @@ namespace LL {
                         continue;
                     }
 
-                    // Resolve formID after load
-                    std::uint32_t resolvedNPCID = 0;
-                    if (!a_intfc->ResolveFormID(npcFormID, resolvedNPCID)) {
-                        SKSE::log::warn("Failed to resolve NPC formID 0x{:X}, skipping", npcFormID);
-                        // Skip this NPC's data
-                        NPCData tempData;
-                        if (!tempData.Load(a_intfc)) {
-                            SKSE::log::error("Failed to skip invalid NPC data");
+                    if (version >= 2) {
+                        // v2: NPC key is a TESNPC base FormID — resolve via plugin load order remapping
+                        std::uint32_t resolvedNPCID = 0;
+                        if (!a_intfc->ResolveFormID(npcFormID, resolvedNPCID)) {
+                            SKSE::log::warn("Failed to resolve NPC base FormID 0x{:X}, skipping", npcFormID);
+                            NPCData tempData;
+                            if (!tempData.Load(a_intfc, version)) {
+                                SKSE::log::error("Failed to skip invalid NPC data for 0x{:X}", npcFormID);
+                            }
+                            continue;
                         }
-                        continue;
+                        NPCData npcData;
+                        if (!npcData.Load(a_intfc, version)) {
+                            SKSE::log::error("Failed to load NPC data for base FormID 0x{:X}", resolvedNPCID);
+                            continue;
+                        }
+                        _store[resolvedNPCID] = std::move(npcData);
+                    } else {
+                        // v1: NPC key is a raw Actor refFormID — store as-is in legacyStore for later migration
+                        NPCData npcData;
+                        if (!npcData.Load(a_intfc, version)) {
+                            SKSE::log::error("Failed to load legacy NPC data for formID 0x{:X}", npcFormID);
+                            continue;
+                        }
+                        _legacyStore[npcFormID] = std::move(npcData);
                     }
-
-                    NPCData npcData;
-                    if (!npcData.Load(a_intfc)) {
-                        SKSE::log::error("Failed to load NPC data for formID 0x{:X}", resolvedNPCID);
-                        continue;
-                    }
-
-                    _store[resolvedNPCID] = std::move(npcData);
                 }
 
-                SKSE::log::info("LoversLedgerService: Load complete - {} NPCs loaded", _store.size());
-            }  // lock is released here
-
-            // Automatically cleanup invalid FormIDs after loading
-            SKSE::log::info("Running automatic cleanup of invalid FormIDs...");
-            auto [npcsRemoved, loversRemoved] = CleanupInvalidFormIDs();
-            if (npcsRemoved > 0 || loversRemoved > 0) {
-                SKSE::log::info("Automatic cleanup removed {} invalid NPCs and {} invalid lovers", npcsRemoved,
-                               loversRemoved);
-            }
+                SKSE::log::info("LoversLedgerService: Load complete - {} NPCs in store, {} in legacy store",
+                                _store.size(), _legacyStore.size());
+            }  // lock released here
         }
     }
 

@@ -20,6 +20,8 @@ Function Maintenance()
     if slf != none
         TTLL_SexlabIntegration.Maintenance(self, slf)
     endif
+
+    StorageUtil.ClearAllPrefix("TTLNLDec_")
 EndFunction
 
 Function OstimSetup()

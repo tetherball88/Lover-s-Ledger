@@ -13,20 +13,36 @@ This README is a concise reference for what the mod actually implements, how to 
 
 - Persistent ledger service: `LoversLedgerService`
     - Stores per-NPC statistics and per-lover relationship data in memory and persists via SKSE serialization
-    - Tracks: exclusive/group/solo counts, same-sex encounters, last encounter time, total internal climax (did/got)
+    - **Keyed on `TESNPC` base FormID** (not Actor reference FormID) — data is stable across cell loads/unloads
+    - Only tracks **unique** NPCs; non-unique actors (bandits, generic NPCs) are silently skipped for per-NPC stats; encounters with them increment `othersCount` instead
+    - Tracks: exclusive/group/solo counts, same-sex encounters, last encounter time, total internal climax (did/got), `othersCount`
     - Tracks action counts (actions_did / actions_got) keyed by normalized action name
     - Maintains lover entries with: exclusiveSex, partOfSameGroupSex, lastTime, orgasms, internalClimax
+    - Serialization version 2 (auto-migrates v1 data from Actor refFormIDs to TESNPC base FormIDs)
 
 - Papyrus bindings
     - `TTLL_Store` (core API): get/set generic properties, record actions, query lovers/actions/score
     - `TTLL_ThreadsCollector` (runtime API): thread lifecycle, actor properties, excitement contributions
     - `TTLL_MainController`, `TTLL_OstimIntegration`: Papyrus-side glue that listens for OStim events and applies thread data to the ledger
+    - `GetAllNPCs()` and `GetAllLovers()` now return `Form[]` (TESNPC base forms) instead of `Actor[]`
 
-- RelationsFinder integration
-    - If `RelationsFinder.dll` is present, the plugin will query it on data load and scan existing spouse/courting/lover relationships to generate seed data for the ledger
+- Relationship seeding (built-in, no external plugin required)
+    - On `kPostLoadGame` and `kNewGame`, the plugin scans all `BGSRelationship` forms in the loaded game to seed spouse/courting/lover history
+    - Runs **at most once per playthrough** (the completion flag is persisted in the SKSE save)
+    - No dependency on RelationsFinder; the scan is done natively using CommonLibSSE
+
+- SkyrimNet integration (optional)
+    - If `SkyrimNet.dll` is present (v5+), the plugin registers two decorators at `kDataLoaded`:
+        - `ttll_get_npc_sexual_behavior` — prose summary of an NPC's sexual orientation and encounter preferences
+        - `ttll_get_npc_lovers` — Markdown list of significant sexual partners with bond strength and encounter stats
+    - Prompt submodule files are shipped with the mod for SkyrimNet character bio injection:
+        - `SKSE/Plugins/SkyrimNet/prompts/submodules/character_bio/0301_personality_lovers_ledger_insights.prompt`
+        - `SKSE/Plugins/SkyrimNet/prompts/submodules/character_bio/0601_relations_lovers_ledger_insights.prompt`
+    - If SkyrimNet is not installed, the integration is silently skipped
 
 - SKSE Serialization
-    - Ledger data is saved/loaded using SKSE serialization (unique ID: 'LLGR', versioned)
+    - Ledger data is saved/loaded using SKSE serialization (unique ID: 'LLGR', format version 2)
+    - v1 saves (Actor refFormID keys) are automatically migrated to v2 (TESNPC base FormID keys) on load
     - Serialization logs failures and attempts to skip/continue on invalid entries for robustness
 
 ## Papyrus API (short reference)
@@ -44,8 +60,8 @@ This README is a concise reference for what the mod actually implements, how to 
   - GetAllActions(Actor npc, Bool isDid, Int topK = -1) -> String[]
   - GetActionCount(Actor npc, Bool isDid, String actionName) -> Int
   - IncrementInt(Actor npc, String intName)
-  - GetAllNPCs() -> Actor[]
-  - GetAllLovers(Actor npc, Int topK = -1) -> Actor[]
+  - GetAllNPCs() -> **Form[]** (returns TESNPC base forms; cast to `ActorBase` for name/gender, `Actor` may be None if cell is unloaded)
+  - GetAllLovers(Actor npc, Int topK = -1) -> **Form[]** (same as above)
   - GetLoverScore(Actor npc, Actor lover) -> Float
 
 **TTLL_ThreadsCollector** (global functions registered in Papyrus)
@@ -60,12 +76,16 @@ This README is a concise reference for what the mod actually implements, how to 
 
 Notes on property paths: several functions accept dot-separated property paths (example: `"totalInternalClimax.did"`, `"actions_did.Vaginal"`, `"internalClimax.got"`). Property names are normalized to lowercase.
 
+**TESNPC vs Actor note:** All ledger functions accept `Actor` parameters, but internally resolve to the TESNPC base FormID. Non-unique actors (bandits, generic NPCs) are silently ignored for per-NPC stats; their encounters are tracked via `othersCount` on each unique partner.
+
 ## Behavior & important details
 
   - Thread data is runtime-only and will not be persisted. Use ApplyThreadToLedger when a scene finishes to persist results into the ledger.
-  - Ledger data is persisted across saves using SKSE serialization.
-  - When RelationsFinder is available at data load, the plugin will scan and seed existing relationships to produce realistic historical data (spouse/courting/lover). Missing forms are skipped with warnings.
+  - Ledger data is persisted across saves using SKSE serialization (format version 2).
+  - Relationship seeding runs automatically at game load/new game. It scans all BGSRelationship forms and seeds spouse/courting/lover history for unique NPCs not already in the ledger. The scan runs at most once per playthrough.
+  - Non-unique actors (0xFF temp FormIDs, non-unique TESNPC) are never stored as NPC or lover entries. Encounters with non-unique partners are tallied in `othersCount` on the unique actor's record.
   - Action and property names are normalized to lowercase before storage and lookup for Papyrus compatibility.
+  - Existing v1 saves (keyed by Actor refFormID) are automatically migrated to v2 (keyed by TESNPC base FormID) on the first load after updating.
 
 ## Logging and debugging
 
@@ -79,7 +99,7 @@ Notes on property paths: several functions accept dot-separated property paths (
   - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
   - SexLab (optional — the project includes a stub `TTLL_SexlabIntegration.psc` for custom integration)
-  - RelationsFinder (optional) to auto-seed relationships
+  - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v5+ (optional) — enables NPC bio decorators for AI-driven dialogue
 
 ## Installation
 
@@ -99,6 +119,17 @@ Notes on property paths: several functions accept dot-separated property paths (
   - The service provides public functions in C++ exposed to Papyrus; see `SKSE_Source/src` for the exact signatures and behavior.
 
 ## Changelog
+
+  - v1.0.0.dev (commit af8bcf0):
+    - **TESNPC-based tracking**: ledger now keys on TESNPC base FormIDs instead of Actor reference FormIDs, fixing data loss when cells unload/reload
+    - Non-unique actors (bandits, generic NPCs) are skipped for per-NPC stats; encounters with them increment the new `othersCount` field on each unique partner's record
+    - `GetAllNPCs()` and `GetAllLovers()` now return `Form[]` (TESNPC base forms) instead of `Actor[]`
+    - **Dropped RelationsFinder dependency**: relationship seeding is now built-in via a one-time scan of all `BGSRelationship` forms (runs at `kPostLoadGame` / `kNewGame`, once per playthrough)
+    - **Optional SkyrimNet integration** (v5+): merged Lover's Neural Ledger decorator logic directly into this plugin; registers `ttll_get_npc_sexual_behavior` and `ttll_get_npc_lovers` decorators; ships SkyrimNet prompt submodule files for character bio injection
+    - Serialization version bumped to 2; automatic v1 → v2 migration on first load (legacy Actor refFormID data is lazily resolved and merged)
+    - Added `otherscount` NPC property (accessible via `GetNpcInt(npc, "otherscount")`)
+    - Added `nlohmann_json` vcpkg dependency
+    - Papyrus `Maintenance()` now clears legacy `TTLNLDec_` StorageUtil keys from the old Neural Ledger standalone mod
 
   - v0.1.0.dev:
     - **Major Architecture Change**: Migrated from JContainers-based Papyrus implementation to native SKSE plugin

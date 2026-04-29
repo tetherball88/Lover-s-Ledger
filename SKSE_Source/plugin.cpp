@@ -2,20 +2,18 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
 
-#include "LoversLedgerService.h"
+#include "src/LoversLedgerService.h"
 #include "PCH.h"
-#include "ThreadsCollector.h"
+#include "src/ThreadsCollector.h"
 #include "src/Papyrus_LoversLedger.h"
 #include "src/Papyrus_ThreadsCollector.h"
-#include "src/RelationsFinderAPI.h"
 #include "src/UI.h"
+#include "src/SkyrimNetPublicAPI.h"
+#include "src/SkyrimNetDecorators.h"
 
 using namespace SKSE;
 
 namespace {
-    // Store the RelationsFinder API interface (using callback-based API for DLL safety)
-    RelationsFinderAPI::GetNpcRelationshipsCallbackFn g_relationsFinderAPI = nullptr;
-
     void SetupLogging() {
         auto logDir = SKSE::log::log_directory();
         if (!logDir) {
@@ -89,8 +87,14 @@ SKSEPluginLoad(const LoadInterface* skse) {
                         break;
 
                     case SKSE::MessagingInterface::kPostLoadGame:
+                        SKSE::log::info("PostLoadGame: running legacy store migration...");
+                        LL::LoversLedgerService::GetSingleton().TryMigrateLegacyStore();
+                        LL::LoversLedgerService::GetSingleton().ScanAllGameRelationships();
+                        break;
+
                     case SKSE::MessagingInterface::kNewGame:
-                        SKSE::log::info("New game/Load...");
+                        SKSE::log::info("New game started.");
+                        LL::LoversLedgerService::GetSingleton().ScanAllGameRelationships();
                         break;
 
                     case SKSE::MessagingInterface::kDataLoaded: {
@@ -102,30 +106,12 @@ SKSEPluginLoad(const LoadInterface* skse) {
                         // Register SKSEMenuFramework UI
                         LoversLedgerUI::RegisterMenu();
 
-                        // Query RelationsFinder API via exported function
-                        SKSE::log::info("Querying RelationsFinder API...");
-                        HMODULE handle = GetModuleHandleA("RelationsFinder.dll");
-                        if (handle) {
-                            auto requestAPI = reinterpret_cast<RelationsFinderAPI::RequestAPIFunction>(
-                                GetProcAddress(handle, "RequestRelationsFinderAPI"));
-                            if (requestAPI) {
-                                auto* api = requestAPI();
-                                if (api && api->version == RelationsFinderAPI::kAPIVersion) {
-                                    // Use the new safe callback API instead of the deprecated vector-returning one
-                                    g_relationsFinderAPI = api->GetNpcRelationshipsCallback;
-                                    SKSE::log::info("RelationsFinder callback API acquired successfully (version {})",
-                                                    api->version);
-                                    LL::LoversLedgerService::GetSingleton().SetRelationsFinderAPI(g_relationsFinderAPI);
-                                } else {
-                                    SKSE::log::warn(
-                                        "RelationsFinder API version mismatch or null (expected: {}, got: {})",
-                                        RelationsFinderAPI::kAPIVersion, api ? api->version : 0);
-                                }
-                            } else {
-                                SKSE::log::warn("RequestRelationsFinderAPI function not found");
-                            }
+                        // Connect to SkyrimNet and register decorators
+                        if (FindFunctions()) {
+                            SKSE::log::info("SkyrimNet API v{} found", PublicGetVersion());
+                            RegisterSkyrimNetDecorators();
                         } else {
-                            SKSE::log::warn("RelationsFinder.dll not loaded");
+                            SKSE::log::info("SkyrimNet not found — decorator registration skipped");
                         }
                         break;
                     }

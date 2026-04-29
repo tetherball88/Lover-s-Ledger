@@ -6,12 +6,11 @@
 #include <vector>
 
 #include "PCH.h"
-#include "RelationsFinderAPI.h"
 
 namespace LL {
 
     // Serialization constants
-    constexpr std::uint32_t kSerializationVersion = 1;
+    constexpr std::uint32_t kSerializationVersion = 2;
     constexpr std::uint32_t kSerializationType = 'LLGR';  // LoversLedger
 
     struct InternalClimax {
@@ -47,18 +46,20 @@ namespace LL {
         std::unordered_map<std::string, int> actions_did;
         std::unordered_map<std::string, int> actions_got;
 
-        // lovers keyed by formID
+        // lovers keyed by TESNPC base FormID (v2) or Actor refFormID (v1 legacy)
         std::unordered_map<std::uint32_t, LoverData> lovers;
 
-        // Track if relationships have been initialized
-        bool relationshipsInitialized{false};
+        // v1 migration staging: keyed by Actor refFormID; drained lazily as lover cells load.
+        // Never serialized. Populated during MigrateOneLegacyEntry for persistent-ref lovers
+        // whose cells were not loaded at migration time.
+        std::unordered_map<std::uint32_t, LoverData> legacyLovers;
 
-        // Track if existing relationships have been scanned from Relations Finder
-        bool existingRelationsScan{false};
+        // Count of encounters with non-unique partners (bandits, generic NPCs, etc.)
+        int othersCount{0};
 
         // Serialization
         void Save(SKSE::SerializationInterface* a_intfc, std::uint32_t npcFormID) const;
-        bool Load(SKSE::SerializationInterface* a_intfc);
+        bool Load(SKSE::SerializationInterface* a_intfc, std::uint32_t version);
     };
 
     // A singleton service storing NPC/lover stats with SKSE serialization support
@@ -73,6 +74,9 @@ namespace LL {
                          float orgasms);
         void UpdateLastTime(std::uint32_t npcFormID, std::uint32_t loverFormID = 0);
         void UpdateInternalClimax(std::uint32_t npcFormID, std::uint32_t loverFormID, std::string_view didGot);
+
+        // Increment othersCount for a unique NPC (non-unique partner encounter)
+        void UpdateOthers(std::uint32_t npcBaseFormID);
 
         // Generic getters with dot-separated property paths
         int GetNpcInt(std::uint32_t npcFormID, std::string_view propName) const;
@@ -110,9 +114,6 @@ namespace LL {
         // Returns: calculated score, or 0.0f if NPC or lover not found
         float GetLoverScore(std::uint32_t npcFormID, std::uint32_t loverFormID) const;
 
-        // Set the RelationsFinder API function pointer
-        void SetRelationsFinderAPI(RelationsFinderAPI::GetNpcRelationshipsCallbackFn apiFunc) noexcept;
-
         // SKSE Serialization
         void SaveCallback(SKSE::SerializationInterface* a_intfc);
         void LoadCallback(SKSE::SerializationInterface* a_intfc);
@@ -132,6 +133,14 @@ namespace LL {
         // Returns the number of NPCs and lovers removed
         std::pair<int, int> CleanupInvalidFormIDs();
 
+        // Iterate _legacyStore, migrate what can be migrated, log summary.
+        void TryMigrateLegacyStore();
+
+        // Scan all BGSRelationship forms in the loaded game and seed history for
+        // spouse/courting/lover pairs not yet in the ledger. Runs at most once per
+        // playthrough (flag persisted in the SKSE save). Thread-safe.
+        void ScanAllGameRelationships();
+
     private:
         LoversLedgerService() = default;
         ~LoversLedgerService() = default;
@@ -140,13 +149,28 @@ namespace LL {
 
         NPCData& EnsureNPC(std::uint32_t formID);
         const NPCData* FindNPC(std::uint32_t formID) const;
-        void ScanExistingRelationships(std::uint32_t npcFormID, NPCData& npcData);
+
+        // v1 → v2 migration helpers
+        static bool IsTempFormID(std::uint32_t id) noexcept { return (id >> 24) == 0xFF; }
+        // Classify and migrate one legacy entry. Mutates legacyData.lovers to remove resolved lovers.
+        // Returns true if the legacy entry should be removed (NPC migrated + all lovers handled, or NPC dropped).
+        // Returns false if the NPC or any lovers are still deferred (keep entry in _legacyStore).
+        bool MigrateOneLegacyEntry(std::uint32_t npcRefFormID, NPCData& legacyData);
         void CreateExistingLoverInternal(std::uint32_t npcFormID, std::uint32_t loverFormID, bool isSpouse,
                                          bool isCourting, bool isLover);
 
+        // v2 store: keyed by TESNPC base FormID
         std::unordered_map<std::uint32_t, NPCData> _store;
+
+        // v1 migration staging: keyed by Actor refFormID; never serialized
+        // Drained lazily as NPCs come back into range
+        std::unordered_map<std::uint32_t, NPCData> _legacyStore;
+
+        // Set to true once ScanAllGameRelationships completes; persisted in the SKSE save
+        // so the scan does not repeat on subsequent loads of the same playthrough.
+        bool _globalRelationsScanDone{false};
+
         mutable std::shared_mutex _mutex;  // allow concurrent reads
-        RelationsFinderAPI::GetNpcRelationshipsCallbackFn _relationsFinderAPI{nullptr};
     };
 
 }  // namespace LL

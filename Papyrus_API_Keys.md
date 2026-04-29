@@ -14,6 +14,7 @@ These keys are used with `GetNpcInt`, `SetNpcInt`, `GetNpcFlt`, and `SetNpcFlt`.
 | `solosex` | Total count of solo sex acts. |
 | `exclusivesex` | Total count of exclusive sex across all lovers. |
 | `groupsex` | Total count of group sex participation across all lovers. |
+| `otherscount` | Total encounters with non-unique partners (bandits, generic NPCs, etc.). Read-only in practice; incremented automatically when a scene involves a non-unique partner. |
 | `totalinternalclimax.did` | Total internal climaxes given to all partners. |
 | `totalinternalclimax.got` | Total internal climaxes received from all partners. |
 | `actions_did.<ActionName>` | Count of a specific action performed (e.g., `actions_did.Vaginal`). |
@@ -55,6 +56,7 @@ These keys are used with `IncrementInt` to increase a value by 1.
 | `solosex` |
 | `exclusivesex` |
 | `groupsex` |
+| `otherscount` |
 
 ## Action Recording
 
@@ -66,3 +68,13 @@ Used with `RecordAction(Actor npc, String actionName, Bool isDid)`.
 | `isDid` | `true` if the NPC performed the act; `false` if they received it. |
 
 *Note: Calling `RecordAction` automatically updates the corresponding `actions_did.<ActionName>` or `actions_got.<ActionName>` counter.*
+
+## Return Type Notes
+
+`GetAllNPCs()` and `GetAllLovers()` return `Form[]` containing **TESNPC base forms** (not Actor references).
+
+- Cast to `ActorBase` to read name, gender, race, etc.: `(someForm as ActorBase).GetName()`
+- Casting to `Actor` returns `None` when the NPC's cell is not loaded — this is expected and safe.
+- All other `TTLL_Store` functions still accept `Actor` parameters; the plugin resolves the base FormID internally.
+
+> **Non-unique actors** (bandits, generic NPCs with a non-unique TESNPC base) are never stored as NPC or lover entries. Encounters with them are instead accumulated in the `otherscount` field of each unique NPC that participated in the scene.

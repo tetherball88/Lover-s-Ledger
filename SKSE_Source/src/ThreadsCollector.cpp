@@ -405,41 +405,69 @@ namespace LL {
             return actions;
         }
 
+        // Helper: Resolve an Actor reference FormID to a TESNPC base FormID.
+        // Returns {baseFormID, true} if the actor is loaded and IsUnique(); {0, false} otherwise.
+        std::pair<std::uint32_t, bool> ResolveUniqueBaseID(std::uint32_t refFormID) {
+            auto* form = RE::TESForm::LookupByID(refFormID);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            if (!actor) return {0, false};
+            auto* base = actor->GetActorBase();
+            if (!base || !base->IsUnique()) return {0, false};
+            return {base->GetFormID(), true};
+        }
+
         // Helper: Apply actor's basic data to ledger
         void ApplyActorBasicData(LL::LoversLedgerService& ledger, std::uint32_t actorFormID,
                                  const ThreadActor& actorData, std::string_view encounterType) {
+            auto [baseFormID, isUnique] = ResolveUniqueBaseID(actorFormID);
+            if (!isUnique) {
+                SKSE::log::trace("ApplyActorBasicData: skipping non-unique actor 0x{:X}", actorFormID);
+                return;
+            }
             // Update last time
-            ledger.UpdateLastTime(actorFormID);
+            ledger.UpdateLastTime(baseFormID);
 
             // Increment encounter type counter
-            ledger.IncrementInt(actorFormID, encounterType);
+            ledger.IncrementInt(baseFormID, encounterType);
 
             // Increment same-sex encounter if applicable
             if (actorData.hadSameSexEncounter) {
-                ledger.IncrementInt(actorFormID, SAME_SEX_ENCOUNTER);
+                ledger.IncrementInt(baseFormID, SAME_SEX_ENCOUNTER);
             }
         }
 
         // Helper: Apply actor's actions to ledger
         void ApplyActorActions(LL::LoversLedgerService& ledger, std::uint32_t actorFormID,
                                const ThreadActor& actorData) {
+            auto [baseFormID, isUnique] = ResolveUniqueBaseID(actorFormID);
+            if (!isUnique) {
+                SKSE::log::trace("ApplyActorActions: skipping non-unique actor 0x{:X}", actorFormID);
+                return;
+            }
+
             // Update "did" actions
             if (!actorData.did.empty()) {
                 auto didActions = ExtractActions(actorData.did);
-                ledger.UpdateActions(actorFormID, didActions, DID_ACTION);
+                ledger.UpdateActions(baseFormID, didActions, DID_ACTION);
             }
 
             // Update "got" actions
             if (!actorData.got.empty()) {
                 auto gotActions = ExtractActions(actorData.got);
-                ledger.UpdateActions(actorFormID, gotActions, GOT_ACTION);
+                ledger.UpdateActions(baseFormID, gotActions, GOT_ACTION);
             }
         }
 
         // Helper: Apply excitement contributions to ledger
         void ApplyExcitementContributions(LL::LoversLedgerService& ledger, std::uint32_t actorFormID,
                                           const ThreadActor& actorData, size_t actorCount) {
-            SKSE::log::info("Actor 0x{:X} has {} excitement contributors", actorFormID,
+            auto [npcBaseFormID, npcUnique] = ResolveUniqueBaseID(actorFormID);
+            if (!npcUnique) {
+                SKSE::log::trace("ApplyExcitementContributions: skipping non-unique actor 0x{:X}", actorFormID);
+                return;
+            }
+
+            SKSE::log::info("Actor 0x{:X} (base 0x{:X}) has {} excitement contributors", actorFormID, npcBaseFormID,
                             actorData.excitementContribution.contributors.size());
 
             for (const auto& [loverFormID, contributor] : actorData.excitementContribution.contributors) {
@@ -459,10 +487,17 @@ namespace LL {
                     continue;  // Solo - no lover to update
                 }
 
-                // Update lover with orgasm contributions
-                SKSE::log::info("  Calling UpdateLover(npc=0x{:X}, lover=0x{:X}, type={}, orgasms={})", actorFormID,
-                                loverFormID, loverEncounterType, contributor.orgasms);
-                ledger.UpdateLover(actorFormID, loverFormID, loverEncounterType, contributor.orgasms);
+                auto [loverBaseFormID, loverUnique] = ResolveUniqueBaseID(loverFormID);
+                if (!loverUnique) {
+                    // Non-unique or unloaded lover — count toward othersCount
+                    SKSE::log::info("  Lover 0x{:X} is non-unique/unloaded, bumping othersCount for NPC base 0x{:X}",
+                                    loverFormID, npcBaseFormID);
+                    ledger.UpdateOthers(npcBaseFormID);
+                } else {
+                    SKSE::log::info("  Calling UpdateLover(npc base=0x{:X}, lover base=0x{:X}, type={}, orgasms={})",
+                                    npcBaseFormID, loverBaseFormID, loverEncounterType, contributor.orgasms);
+                    ledger.UpdateLover(npcBaseFormID, loverBaseFormID, loverEncounterType, contributor.orgasms);
+                }
             }
         }
     }  // namespace

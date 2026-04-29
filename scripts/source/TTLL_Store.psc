@@ -96,12 +96,16 @@ Function IncrementInt(Actor npc, String intName) Global Native
 ; ========================================================================================
 
 ; Get all registered NPCs in the ledger
-Actor[] Function GetAllNPCs() Global Native
+; Returns TESNPC base forms (ActorBase) — valid even when cells are unloaded
+; Use (form as ActorBase) to get name/gender; (form as Actor) returns None if unloaded
+Form[] Function GetAllNPCs() Global Native
 
 ; Get all lovers for a specific NPC, sorted by lover score (highest to lowest)
 ; topK: -1 returns all lovers, >0 returns only top K lovers by score
+; Returns TESNPC base forms (ActorBase) — valid even when cells are unloaded
+; Use (form as ActorBase) to get name/gender; (form as Actor) returns None if unloaded
 ; Example: GetAllLovers(npc, 5) returns the 5 highest-scoring lovers
-Actor[] Function GetAllLovers(Actor npc, Int topK = -1) Global Native
+Form[] Function GetAllLovers(Actor npc, Int topK = -1) Global Native
 
 ; Calculate lover score based on encounters, orgasms, and time decay
 ; Returns a score that represents the strength/recency of the relationship

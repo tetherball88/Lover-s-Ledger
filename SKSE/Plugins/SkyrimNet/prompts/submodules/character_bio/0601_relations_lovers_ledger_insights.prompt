@@ -1,0 +1,3 @@
+{% if (render_mode == "full" or render_mode == "thoughts" or render_mode == "transform" or render_mode == "ttll_relations") and not decnpc(actorUUID).isVirtual %}
+    {{ttll_get_npc_lovers(actorUUID)}}
+{% endif %}
