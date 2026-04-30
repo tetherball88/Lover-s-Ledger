@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <functional>
 
+#include "UniqueOverrides.h"
+
 namespace LL {
 
     // ========================================================================================
@@ -314,7 +316,7 @@ namespace LL {
                 auto* legacyForm = RE::TESForm::LookupByID(legacyIt->first);
                 auto* legacyActor = legacyForm ? legacyForm->As<RE::Actor>() : nullptr;
                 if (legacyActor) {
-                    auto* legacyBase = legacyActor->GetActorBase();
+                    auto* legacyBase = LL::GetStableBase(legacyActor);
                     if (legacyBase && legacyBase->GetFormID() == formID) {
                         MigrateOneLegacyEntry(legacyIt->first, legacyIt->second);
                         legacyIt = _legacyStore.erase(legacyIt);
@@ -355,20 +357,20 @@ namespace LL {
             return false;
         }
 
-        auto* npcBase = npcActor->GetActorBase();
-        if (!npcBase) {
+        auto* npcRootBase = LL::GetStableBase(npcActor);
+        if (!npcRootBase) {
             SKSE::log::warn("MigrateOneLegacyEntry: NPC 0x{:X} has no ActorBase, dropping", npcRefFormID);
             return true;
         }
 
-        if (!npcBase->IsUnique()) {
+        if (!LL::IsEffectivelyUnique(npcRootBase)) {
             // Non-unique subject (bandit, generic NPC) — no per-NPC stats preserved
             SKSE::log::trace("MigrateOneLegacyEntry: NPC 0x{:X} ({}) is non-unique, dropping",
-                             npcRefFormID, npcBase->GetName());
+                             npcRefFormID, npcRootBase->GetName());
             return true;
         }
 
-        const std::uint32_t npcBaseFormID = npcBase->GetFormID();
+        const std::uint32_t npcBaseFormID = npcRootBase->GetFormID();
 
         // --- Migrate NPC-level stats (merge: take the larger value to avoid overwriting newer data) ---
         auto& dest = _store[npcBaseFormID];
@@ -392,10 +394,10 @@ namespace LL {
             auto* loverActor = loverForm ? loverForm->As<RE::Actor>() : nullptr;
 
             if (loverActor) {
-                auto* loverBase = loverActor->GetActorBase();
-                if (loverBase && loverBase->IsUnique()) {
+                auto* loverRootBase = LL::GetStableBase(loverActor);
+                if (loverRootBase && LL::IsEffectivelyUnique(loverRootBase)) {
                     // Unique lover — merge into dest.lovers
-                    const std::uint32_t loverBaseFormID = loverBase->GetFormID();
+                    const std::uint32_t loverBaseFormID = loverRootBase->GetFormID();
                     auto& destLover = dest.lovers[loverBaseFormID];
                     destLover.exclusiveSex       = std::max(destLover.exclusiveSex,       loverData.exclusiveSex);
                     destLover.partOfSameGroupSex = std::max(destLover.partOfSameGroupSex,  loverData.partOfSameGroupSex);
@@ -443,7 +445,8 @@ namespace LL {
                 // Determine whether it was migrated or just dropped (temp/non-unique)
                 auto* f = RE::TESForm::LookupByID(it->first);
                 auto* a = f ? f->As<RE::Actor>() : nullptr;
-                bool wasUnique = a && a->GetActorBase() && a->GetActorBase()->IsUnique();
+                auto* _base = LL::GetStableBase(a);
+                bool wasUnique = _base && LL::IsEffectivelyUnique(_base);
                 if (wasUnique) ++migrated; else ++dropped;
                 it = _legacyStore.erase(it);
             } else {
@@ -469,9 +472,9 @@ namespace LL {
                 auto* loverActor = loverForm ? loverForm->As<RE::Actor>() : nullptr;
 
                 if (loverActor) {
-                    auto* loverBase = loverActor->GetActorBase();
-                    if (loverBase && loverBase->IsUnique()) {
-                        const std::uint32_t loverBaseFormID = loverBase->GetFormID();
+                    auto* loverRootBase = LL::GetStableBase(loverActor);
+                    if (loverRootBase && LL::IsEffectivelyUnique(loverRootBase)) {
+                        const std::uint32_t loverBaseFormID = loverRootBase->GetFormID();
                         auto& destLover = npcData.lovers[loverBaseFormID];
                         destLover.exclusiveSex       = std::max(destLover.exclusiveSex,       loverData.exclusiveSex);
                         destLover.partOfSameGroupSex = std::max(destLover.partOfSameGroupSex,  loverData.partOfSameGroupSex);

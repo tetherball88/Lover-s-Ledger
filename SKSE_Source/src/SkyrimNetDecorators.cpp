@@ -2,6 +2,7 @@
 
 #include "LoversLedgerService.h"
 #include "PCH.h"
+#include "UniqueOverrides.h"
 
 #include <functional>
 #include <sstream>
@@ -18,9 +19,8 @@ namespace {
 
     // Returns the NPC base FormID if the actor is non-null and unique; 0 otherwise.
     static std::uint32_t GetUniqueBaseID(RE::Actor* actor) {
-        if (!actor) return 0;
-        auto* base = actor->GetActorBase();
-        if (!base || !base->IsUnique()) return 0;
+        auto* base = LL::GetStableBase(actor);
+        if (!base || !LL::IsEffectivelyUnique(base)) return 0;
         return base->GetFormID();
     }
 
@@ -129,7 +129,9 @@ namespace {
 
         // Retrieve all lover FormIDs sorted by score (highest first)
         std::vector<std::uint32_t> loverIDs = service.GetAllLovers(baseID, -1);
-        if (loverIDs.empty()) return "";
+        int othersCount = service.GetNpcInt(baseID, "otherscount");
+
+        if (loverIDs.empty() && othersCount == 0) return "";
 
         // Get current game time for recency computation
         float currentTime = 0.0f;
@@ -139,12 +141,17 @@ namespace {
 
         std::ostringstream out;
         bool headerWritten = false;
+        int weakCount = 0;
 
         for (std::uint32_t loverID : loverIDs) {
             float score      = service.GetLoverScore(baseID, loverID);
             std::string bond = BondFromScore(score);
 
-            if (bond == "weak") continue;  // Mirror template: skip weak bonds
+            if (bond == "weak") {
+                // Tally weak-bond unique lovers into the insignificant count
+                weakCount += 1;
+                continue;
+            }
 
             int exclusiveSex = service.GetLoverInt(baseID, loverID, "exclusivesex");
             int groupSex     = service.GetLoverInt(baseID, loverID, "partofsamegroupsex");
@@ -163,6 +170,15 @@ namespace {
                 << total << " encounter" << (total != 1 ? "s" : "")
                 << " (" << exclusiveSex << " private, " << groupSex << " group)"
                 << ", last " << recency << "\n";
+        }
+
+        int insignificantTotal = othersCount + weakCount;
+        if (insignificantTotal > 0) {
+            if (!headerWritten) {
+                out << "### Sexual Partners\n";
+            }
+            out << "- **Insignificant one-time partners** (fleeting encounters with no emotional weight or lasting connection): "
+                << insignificantTotal << (insignificantTotal != 1 ? "s" : "") << "\n";
         }
 
         return out.str();

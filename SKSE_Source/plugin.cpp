@@ -10,6 +10,7 @@
 #include "src/UI.h"
 #include "src/SkyrimNetPublicAPI.h"
 #include "src/SkyrimNetDecorators.h"
+#include "src/UniqueOverrides.h"
 
 using namespace SKSE;
 
@@ -113,6 +114,9 @@ SKSEPluginLoad(const LoadInterface* skse) {
                         } else {
                             SKSE::log::info("SkyrimNet not found — decorator registration skipped");
                         }
+
+                        // Load user-defined unique NPC overrides
+                        LL::UniqueOverrides::GetSingleton().Load();
                         break;
                     }
 

@@ -3,6 +3,7 @@
 
 #include "LoversLedgerService.h"
 #include "ThreadsCollector.h"
+#include "UniqueOverrides.h"
 
 namespace LL {
 
@@ -411,8 +412,9 @@ namespace LL {
             auto* form = RE::TESForm::LookupByID(refFormID);
             auto* actor = form ? form->As<RE::Actor>() : nullptr;
             if (!actor) return {0, false};
-            auto* base = actor->GetActorBase();
-            if (!base || !base->IsUnique()) return {0, false};
+            auto* base = LL::GetStableBase(actor);
+            SKSE::log::debug("ResolveUniqueBaseID: 0x{:X}({}) -> base 0x{:X} ({})", refFormID, actor->GetName(), base->GetFormID(), base->GetName());
+            if (!base || !LL::IsEffectivelyUnique(base)) return {0, false};
             return {base->GetFormID(), true};
         }
 

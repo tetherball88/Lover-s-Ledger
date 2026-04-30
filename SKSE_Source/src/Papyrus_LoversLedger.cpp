@@ -2,6 +2,7 @@
 
 #include "LoversLedgerService.h"
 #include "PCH.h"
+#include "UniqueOverrides.h"
 
 namespace LL_Papyrus {
 
@@ -10,8 +11,8 @@ namespace LL_Papyrus {
     // Returns the TESNPC base FormID if the actor is non-null and unique; nullopt otherwise.
     static std::optional<std::uint32_t> UniqueBaseID(RE::Actor* actor) {
         if (!actor) return std::nullopt;
-        auto* base = actor->GetActorBase();
-        if (!base || !base->IsUnique()) return std::nullopt;
+        auto* base = LL::GetStableBase(actor);
+        if (!base || !LL::IsEffectivelyUnique(base)) return std::nullopt;
         return base->GetFormID();
     }
 
