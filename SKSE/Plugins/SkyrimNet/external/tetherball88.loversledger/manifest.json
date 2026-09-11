@@ -1,0 +1,27 @@
+{
+  "id": "tetherball88.loversledger",
+  "type": "bundle",
+  "title": "TT Lover's Ledger",
+  "tagline": "Relationship and encounter statistics ledger for SkyrimNet character bios.",
+  "description": "Injects dynamic sexual behavior summaries and partner history into SkyrimNet character bios, powered by Lover's Ledger tracking data.",
+  "author": "tetherball88",
+  "tags": [
+    "lovers",
+    "relationships",
+    "romance",
+    "character_bio",
+    "bio",
+    "immersion"
+  ],
+  "nsfw": true,
+  "icon": "sparkles",
+  "version": "1.0.2",
+  "min_skyrimnet_version": "0.25.0",
+  "mods": [
+    {
+      "name": "TT_LoversLedger",
+      "file": "TT_LoversLedger.esp",
+      "required": false
+    }
+  ]
+}

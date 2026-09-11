@@ -32,12 +32,13 @@ This README is a concise reference for what the mod actually implements, how to 
     - No dependency on RelationsFinder; the scan is done natively using CommonLibSSE
 
 - SkyrimNet integration (optional)
-    - If `SkyrimNet.dll` is present (v5+), the plugin registers two decorators at `kDataLoaded`:
+    - If `SkyrimNet.dll` is present (v5+ / Beta 25+), the plugin registers two decorators at `kDataLoaded`:
         - `ttll_get_npc_sexual_behavior` — prose summary of an NPC's sexual orientation and encounter preferences
         - `ttll_get_npc_lovers` — Markdown list of significant sexual partners with bond strength and encounter stats
-    - Prompt submodule files are shipped with the mod for SkyrimNet character bio injection:
-        - `SKSE/Plugins/SkyrimNet/prompts/submodules/character_bio/0301_personality_lovers_ledger_insights.prompt`
-        - `SKSE/Plugins/SkyrimNet/prompts/submodules/character_bio/0601_relations_lovers_ledger_insights.prompt`
+    - Shipped as a SkyrimNet Beta 25+ external plugin bundle (`tetherball88.loversledger`):
+        - `SKSE/Plugins/SkyrimNet/external/tetherball88.loversledger/manifest.json`
+        - `SKSE/Plugins/SkyrimNet/external/tetherball88.loversledger/prompts/submodules/character_bio/0301_personality_lovers_ledger_insights.prompt`
+        - `SKSE/Plugins/SkyrimNet/external/tetherball88.loversledger/prompts/submodules/character_bio/0601_relations_lovers_ledger_insights.prompt`
     - If SkyrimNet is not installed, the integration is silently skipped
 
 - SKSE Serialization
@@ -99,7 +100,7 @@ Notes on property paths: several functions accept dot-separated property paths (
   - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
   - SexLab (optional — the project includes a stub `TTLL_SexlabIntegration.psc` for custom integration)
-  - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v5+ (optional) — enables NPC bio decorators for AI-driven dialogue
+  - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v0.25.0+ (optional) — enables NPC bio decorators for AI-driven dialogue
 
 ## Installation
 
@@ -119,6 +120,9 @@ Notes on property paths: several functions accept dot-separated property paths (
   - The service provides public functions in C++ exposed to Papyrus; see `SKSE_Source/src` for the exact signatures and behavior.
 
 ## Changelog
+
+  - v1.0.2:
+    - **SkyrimNet Beta 25+ external plugin migration**: Migrated prompt submodules from legacy loose file structure (`SKSE/Plugins/SkyrimNet/prompts/`) to external plugin bundle layout (`SKSE/Plugins/SkyrimNet/external/tetherball88.loversledger/`) with `manifest.json`.
 
   - v1.0.0.dev (commit af8bcf0):
     - **TESNPC-based tracking**: ledger now keys on TESNPC base FormIDs instead of Actor reference FormIDs, fixing data loss when cells unload/reload
