@@ -18,23 +18,25 @@ set(MOD_FOLDER_NAME "Lovers Ledger Dev")
 set(SKYRIM_MODS_FOLDER "E:\\Skyrim\\development\\mods")
 set(OUTPUT_FOLDER "${SKYRIM_MODS_FOLDER}/${MOD_FOLDER_NAME}")
 
-set(CommonLibPath "extern/CommonLibSSE-NG")
+# ---------------------------------------------------- #
+#                     CommonLib                        #
+# ---------------------------------------------------- #
+
+if(NOT DEFINED ENV{COMMONLIB_SSE_FOLDER})
+    message(FATAL_ERROR "Missing COMMONLIB_SSE_FOLDER environment variable")
+endif()
+
+set(CommonLibPath "$ENV{COMMONLIB_SSE_FOLDER}")
 set(CommonLibName "CommonLibSSE")
 
-set(BUILD_TESTS       OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 
 # Force static linking for all vcpkg dependencies
 set(VCPKG_TARGET_TRIPLET "x64-windows-static" CACHE STRING "")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "" FORCE)
 
-if (DEFINED CommonLibPath AND NOT ${CommonLibPath} STREQUAL "")
-        add_subdirectory(${CommonLibPath} ${CommonLibName} EXCLUDE_FROM_ALL)
-else ()
-        message(
-                FATAL_ERROR
-                "Variable ${CommonLibName}Path is not set."
-        )
-endif()
+add_subdirectory("${CommonLibPath}" ${CMAKE_CURRENT_BINARY_DIR}/_deps/clib-build EXCLUDE_FROM_ALL)
+get_target_property(COMMONLIB_SRC_DIR CommonLibSSE SOURCE_DIR)
 
 find_path(RAPIDCSV_INCLUDE_DIRS
     NAMES rapidcsv.h
@@ -42,7 +44,7 @@ find_path(RAPIDCSV_INCLUDE_DIRS
     REQUIRED
 )
 
-include("${CommonLibPath}/cmake/CommonLibSSE.cmake")
+include("${COMMONLIB_SRC_DIR}/cmake/CommonLibSSE.cmake")
 
 # Otherwise, you can set OUTPUT_FOLDER to any place you'd like :)
 # set(OUTPUT_FOLDER "C:/path/to/any/folder")

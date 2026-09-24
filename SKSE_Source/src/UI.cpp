@@ -1,6 +1,6 @@
 #include "UI.h"
 #include "LoversLedgerService.h"
-#include "../include/SKSEMenuFramework.h"
+#include "SKSEMenuFrameworkCompat.h"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
