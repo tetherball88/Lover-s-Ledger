@@ -231,6 +231,54 @@ namespace LL {
         }
     }
 
+    void ThreadsCollector::ExcitementContributorOrgasmWeighted(
+        std::int32_t threadID, std::uint32_t actorFormID, const std::vector<std::pair<std::uint32_t, float>>& weights) {
+        std::unique_lock lock(_mutex);
+
+        auto threadIt = _threads.find(threadID);
+        if (threadIt == _threads.end()) {
+            return;
+        }
+
+        auto actorIt = threadIt->second.actors.find(actorFormID);
+        if (actorIt == threadIt->second.actors.end()) {
+            return;
+        }
+
+        auto& contributors = actorIt->second.excitementContribution.contributors;
+        if (contributors.empty()) {
+            return;
+        }
+
+        // Only weights of existing contributors count; never create one here
+        float totalWeight = 0.0f;
+        for (const auto& [loverFormID, weight] : weights) {
+            if (weight > 0.0f && contributors.contains(loverFormID)) {
+                totalWeight += weight;
+            }
+        }
+        if (totalWeight <= 0.0f) {
+            return;
+        }
+
+        for (const auto& [loverFormID, weight] : weights) {
+            if (weight <= 0.0f) {
+                continue;
+            }
+            auto it = contributors.find(loverFormID);
+            if (it != contributors.end()) {
+                it->second.orgasms += weight / totalWeight;
+            }
+        }
+
+        // This orgasm replaced the time split: drop accrual up to now but keep rates
+        const double currentTime = GetCurrentTimestamp();
+        for (auto& [_, contrib] : contributors) {
+            contrib.total = 0.0f;
+            contrib.lastUpdated = currentTime;
+        }
+    }
+
     void ThreadsCollector::UpdateExcitementRate(std::int32_t threadID, std::uint32_t actorFormID,
                                                 std::uint32_t loverFormID, float rate) {
         std::unique_lock lock(_mutex);

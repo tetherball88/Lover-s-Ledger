@@ -8,6 +8,9 @@ scriptname TTLL_SexlabIntegration
 ;   TG_/TR_/TT_/TX_ : current stage acts (giver, receiver, action type, receiver rate)
 ;   EA_/EL_/ER_     : excitement pairs rated this stage (stimulated actor, lover, rate)
 ;   PA_/PL_         : excitement pairs rated last stage
+;   ENG_ (int)      : 1 when this thread follows SkyrimNet_SexLab's OrgasmEngine (latched at StartThread)
+;   YA_/YL_/YS_     : engine threads: enjoyment gain banked per pair this scene (stimulated actor, lover, share)
+;   EB_/EV_         : engine threads: last enjoyment sample per actor (actor, value)
 
 int Function Key(int tid) global
     return -1 - tid
@@ -35,6 +38,9 @@ Function Maintenance(TTLL_MainController mainController, SexLabFramework slf) gl
     ; Once per actor orgasm on both builds; HookOrgasmStart / SexLabOrgasmSeparate would double count
     mainController.UnregisterForModEvent("SexLabOrgasm")
     mainController.RegisterForModEvent("SexLabOrgasm", "SLOrgasm")
+    ; SkyrimNet_SexLab OrgasmEngine: one event per counted orgasm; EngineOwns picks which of the two counts
+    mainController.UnregisterForModEvent("SkyrimNet_SexLab_Orgasm")
+    mainController.RegisterForModEvent("SkyrimNet_SexLab_Orgasm", "SLNetOrgasm")
 
     ; Collector data is runtime only; the next StageStart rebuilds the lists
     StorageUtil.ClearAllPrefix("TTLL_SL_")
@@ -47,6 +53,10 @@ EndFunction
 Function StartThread(int tid) global
     TTLL_ThreadsCollector.CleanThread(Key(tid))
     ClearLists(tid)
+    ; The engine applies engine_disabled at its scene begin; a mid-scene toggle does not change this scene
+    if TTLL_SkyrimNetSexLab.Installed() && !TTLL_SkyrimNetSexLab.EngineDisabled()
+        StorageUtil.SetIntValue(none, "TTLL_SL_ENG_" + tid, 1)
+    endif
 EndFunction
 
 Function OnEnd(int tid) global
@@ -66,6 +76,12 @@ Function ClearLists(int tid) global
     StorageUtil.FloatListClear(none, "TTLL_SL_ER_" + tid)
     StorageUtil.FormListClear(none, "TTLL_SL_PA_" + tid)
     StorageUtil.FormListClear(none, "TTLL_SL_PL_" + tid)
+    StorageUtil.UnsetIntValue(none, "TTLL_SL_ENG_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_YA_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_YL_" + tid)
+    StorageUtil.FloatListClear(none, "TTLL_SL_YS_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_EB_" + tid)
+    StorageUtil.FloatListClear(none, "TTLL_SL_EV_" + tid)
 EndFunction
 
 Function ClearActs(int tid) global
@@ -90,6 +106,8 @@ Function ProcessStage(SexLabFramework slf, int tid) global
     endif
     bool pplus = IsPPlus()
 
+    ; Bank the gain for the pairs that were acting, before ApplyActs replaces them
+    SampleThread(tid)
     ClearActs(tid)
     if positions.Length == 1
         AddSoloAct(slf, thread, tid, positions[0], pplus)
@@ -392,7 +410,167 @@ Function OnOrgasm(SexLabFramework slf, Actor npc) global
         endif
     endif
 
-    TTLL_ThreadsCollector.ExcitementContributorOrgasm(threadKey, npc)
+    CreditOrgasm(tid, npc)
+EndFunction
+
+; Engine threads split by banked enjoyment gain; otherwise (or with no gain banked) the time split
+Function CreditOrgasm(int tid, Actor npc) global
+    int threadKey = Key(tid)
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_YA_" + tid)
+    int rows = 0
+    float sum = 0.0
+    int i = 0
+    while i < count
+        if StorageUtil.FormListGet(none, "TTLL_SL_YA_" + tid, i) == npc
+            rows += 1
+            sum += StorageUtil.FloatListGet(none, "TTLL_SL_YS_" + tid, i)
+        endif
+        i += 1
+    endwhile
+
+    if sum > 0.0
+        Actor[] lovers = PapyrusUtil.ActorArray(rows)
+        float[] weights = PapyrusUtil.FloatArray(rows)
+        int n = 0
+        i = 0
+        while i < count
+            if StorageUtil.FormListGet(none, "TTLL_SL_YA_" + tid, i) == npc
+                lovers[n] = StorageUtil.FormListGet(none, "TTLL_SL_YL_" + tid, i) as Actor
+                weights[n] = StorageUtil.FloatListGet(none, "TTLL_SL_YS_" + tid, i)
+                n += 1
+            endif
+            i += 1
+        endwhile
+        TTLL_ThreadsCollector.ExcitementContributorOrgasmWeighted(threadKey, npc, lovers, weights)
+    else
+        TTLL_ThreadsCollector.ExcitementContributorOrgasm(threadKey, npc)
+    endif
+
+    if !IsEngineLatched(tid)
+        return
+    endif
+    ; This orgasm used up the banked gain; enjoyment is 0 again
+    i = count - 1
+    while i >= 0
+        if StorageUtil.FormListGet(none, "TTLL_SL_YA_" + tid, i) == npc
+            StorageUtil.FormListRemoveAt(none, "TTLL_SL_YA_" + tid, i)
+            StorageUtil.FormListRemoveAt(none, "TTLL_SL_YL_" + tid, i)
+            StorageUtil.FloatListRemoveAt(none, "TTLL_SL_YS_" + tid, i)
+        endif
+        i -= 1
+    endwhile
+    SetBaseline(tid, npc, 0.0)
+EndFunction
+
+; ========================================================================================
+; SkyrimNet_SexLab OrgasmEngine (scenes latched at StartThread)
+; ========================================================================================
+
+bool Function IsEngineLatched(int tid) global
+    return StorageUtil.GetIntValue(none, "TTLL_SL_ENG_" + tid) == 1
+EndFunction
+
+bool Function AnyEngineLatched() global
+    int tid = 0
+    while tid < 15
+        if IsEngineLatched(tid)
+            return true
+        endif
+        tid += 1
+    endwhile
+    return false
+EndFunction
+
+; The engine counts this actor's orgasms: SkyrimNet_SexLab_Orgasm is the count, SexLabOrgasm is an echo
+bool Function EngineOwns(SexLabFramework slf, Actor npc) global
+    if !npc
+        return false
+    endif
+    int tid = slf.FindActorController(npc)
+    return tid >= 0 && IsEngineLatched(tid) && TTLL_SkyrimNetSexLab.IsManaged(npc)
+EndFunction
+
+Function SampleEnjoyment() global
+    int tid = 0
+    while tid < 15
+        SampleThread(tid)
+        tid += 1
+    endwhile
+EndFunction
+
+; Never adds collector actors or rates; only banks enjoyment gain for the current pairs
+Function SampleThread(int tid) global
+    if !IsEngineLatched(tid)
+        return
+    endif
+    Actor[] actors = TTLL_ThreadsCollector.GetActors(Key(tid))
+    int i = 0
+    while i < actors.Length
+        Actor npc = actors[i]
+        if npc && TTLL_SkyrimNetSexLab.IsManaged(npc)
+            SampleActor(tid, npc, TTLL_SkyrimNetSexLab.GetEnjoyment(npc))
+        endif
+        i += 1
+    endwhile
+EndFunction
+
+Function SampleActor(int tid, Actor npc, float value) global
+    int b = StorageUtil.FormListFind(none, "TTLL_SL_EB_" + tid, npc)
+    if b < 0
+        ; First sample: the scene's starting enjoyment is not credit for these partners
+        SetBaseline(tid, npc, value)
+        return
+    endif
+    float delta = value - StorageUtil.FloatListGet(none, "TTLL_SL_EV_" + tid, b)
+    StorageUtil.FloatListSet(none, "TTLL_SL_EV_" + tid, b, value)
+    if delta <= 0.0
+        return
+    endif
+
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_EA_" + tid)
+    float rateSum = 0.0
+    int i = 0
+    while i < count
+        if StorageUtil.FormListGet(none, "TTLL_SL_EA_" + tid, i) == npc
+            rateSum += StorageUtil.FloatListGet(none, "TTLL_SL_ER_" + tid, i)
+        endif
+        i += 1
+    endwhile
+    if rateSum <= 0.0
+        return
+    endif
+
+    i = 0
+    while i < count
+        if StorageUtil.FormListGet(none, "TTLL_SL_EA_" + tid, i) == npc
+            float rate = StorageUtil.FloatListGet(none, "TTLL_SL_ER_" + tid, i)
+            if rate > 0.0
+                AddShare(tid, npc, StorageUtil.FormListGet(none, "TTLL_SL_EL_" + tid, i) as Actor, delta * rate / rateSum)
+            endif
+        endif
+        i += 1
+    endwhile
+EndFunction
+
+Function AddShare(int tid, Actor npc, Actor lover, float share) global
+    int index = FindPair("TTLL_SL_YA_", "TTLL_SL_YL_", tid, npc, lover)
+    if index >= 0
+        StorageUtil.FloatListSet(none, "TTLL_SL_YS_" + tid, index, StorageUtil.FloatListGet(none, "TTLL_SL_YS_" + tid, index) + share)
+    else
+        StorageUtil.FormListAdd(none, "TTLL_SL_YA_" + tid, npc)
+        StorageUtil.FormListAdd(none, "TTLL_SL_YL_" + tid, lover)
+        StorageUtil.FloatListAdd(none, "TTLL_SL_YS_" + tid, share)
+    endif
+EndFunction
+
+Function SetBaseline(int tid, Actor npc, float value) global
+    int b = StorageUtil.FormListFind(none, "TTLL_SL_EB_" + tid, npc)
+    if b >= 0
+        StorageUtil.FloatListSet(none, "TTLL_SL_EV_" + tid, b, value)
+    else
+        StorageUtil.FormListAdd(none, "TTLL_SL_EB_" + tid, npc)
+        StorageUtil.FloatListAdd(none, "TTLL_SL_EV_" + tid, value)
+    endif
 EndFunction
 
 Actor Function FindInternalClimaxTarget(SexLabFramework slf, int tid, Actor npc, bool pplus) global

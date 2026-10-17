@@ -92,6 +92,8 @@ namespace LL {
 
         // Excitement contribution system
         void ExcitementContributorOrgasm(std::int32_t threadID, std::uint32_t actorFormID);
+        void ExcitementContributorOrgasmWeighted(std::int32_t threadID, std::uint32_t actorFormID,
+                                                 const std::vector<std::pair<std::uint32_t, float>>& weights);
         void UpdateExcitementRate(std::int32_t threadID, std::uint32_t actorFormID, std::uint32_t loverFormID,
                                   float rate);
 

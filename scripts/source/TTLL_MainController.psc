@@ -58,7 +58,7 @@ EndFunction
 Function OStimEnd(string EventName, string StrArg, float ThreadID, Form Sender)
     TTLL_OstimINtegration.OStimEnd(ThreadID as int)
 
-    RegisterForSingleUpdate(3)
+    ArmUpdate(3)
 EndFunction
 
 ; ========================================================================================
@@ -73,6 +73,9 @@ Event SLAnimationStarting(int tid, bool hasPlayer)
     ; A P+ ChangeActors restart re-sends AnimationStarting; keep the encounter
     if IsSexLabTid(tid) && !slRestarting[tid]
         TTLL_SexlabIntegration.StartThread(tid)
+        if TTLL_SexlabIntegration.IsEngineLatched(tid)
+            ArmUpdate(EnjoymentPoll())
+        endif
     endif
 EndEvent
 
@@ -122,7 +125,7 @@ Event SLAnimationEnd(int tid, bool hasPlayer)
         ; P+ ChangeActors: hold the apply. If ActorChangeEnd never comes the restart failed; OnUpdate applies.
         slSawEnd[tid] = true
         slEndAt[tid] = Utility.GetCurrentRealTime()
-        RegisterForSingleUpdate(SexLabRestartFallback())
+        ArmUpdate(SexLabRestartFallback())
     else
         SexLabEnd(tid)
     endif
@@ -130,8 +133,25 @@ EndEvent
 
 Event SLOrgasm(Form actorForm, int enjoyment, int orgasms)
     if slf != none
-        TTLL_SexlabIntegration.OnOrgasm(slf, actorForm as Actor)
+        Actor npc = actorForm as Actor
+        ; Engine scenes count SkyrimNet_SexLab_Orgasm instead
+        if TTLL_SexlabIntegration.EngineOwns(slf, npc)
+            return
+        endif
+        TTLL_SexlabIntegration.OnOrgasm(slf, npc)
     endif
+EndEvent
+
+; SkyrimNet_SexLab OrgasmEngine: engine orgasms, external ForceOrgasm and DOM melts. numArg is the scene count.
+Event SLNetOrgasm(string eventName, string strArg, float numArg, Form sender)
+    if slf == none
+        return
+    endif
+    Actor npc = sender as Actor
+    if !TTLL_SexlabIntegration.EngineOwns(slf, npc)
+        return
+    endif
+    TTLL_SexlabIntegration.OnOrgasm(slf, npc)
 EndEvent
 
 ; Seconds to wait for a P+ ChangeActors restart before applying the ended thread
@@ -139,10 +159,23 @@ float Function SexLabRestartFallback()
     return 5.0
 EndFunction
 
+; Seconds between enjoyment samples while an engine scene runs
+float Function EnjoymentPoll()
+    return 1.0
+EndFunction
+
+; RegisterForSingleUpdate replaces the pending update; never push an engine scene's poll back
+Function ArmUpdate(float seconds)
+    if seconds > EnjoymentPoll() && TTLL_SexlabIntegration.AnyEngineLatched()
+        seconds = EnjoymentPoll()
+    endif
+    RegisterForSingleUpdate(seconds)
+EndFunction
+
 Function SexLabEnd(int tid)
     TTLL_SexlabIntegration.OnEnd(tid)
 
-    RegisterForSingleUpdate(3)
+    ArmUpdate(3)
 EndFunction
 
 ; Applies a P+ thread whose ChangeActors restart never confirmed. Returns seconds until the next pending one (0 = none).
@@ -173,6 +206,12 @@ Event OnUpdate()
     TTLL_ThreadsCollector.CleanFinishedThreads()
 
     float nextWait = CheckRestartFallback()
+    TTLL_SexlabIntegration.SampleEnjoyment()
+    if TTLL_SexlabIntegration.AnyEngineLatched()
+        if nextWait <= 0.0 || nextWait > EnjoymentPoll()
+            nextWait = EnjoymentPoll()
+        endif
+    endif
     if nextWait > 0.0
         RegisterForSingleUpdate(nextWait)
     endif

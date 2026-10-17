@@ -59,9 +59,33 @@ namespace OTC_Papyrus {
         }
         auto formID = actor->GetFormID();
         const char* actorName = actor->GetName();
-        SKSE::log::debug("ExcitementContributorOrgasm: threadID={}, actor=0x{:X} ({})", threadID, formID,
-                         actorName ? actorName : "Unknown");
+        SKSE::log::info("Orgasm credit: thread {} actor {:X} ({}) mode=time", threadID, formID,
+                        actorName ? actorName : "Unknown");
         LL::ThreadsCollector::GetSingleton().ExcitementContributorOrgasm(threadID, formID);
+    }
+
+    void ExcitementContributorOrgasmWeighted(RE::StaticFunctionTag*, std::int32_t threadID, RE::Actor* actor,
+                                             std::vector<RE::Actor*> lovers, std::vector<float> weights) {
+        if (!actor) {
+            SKSE::log::warn("ExcitementContributorOrgasmWeighted: null actor");
+            return;
+        }
+        auto formID = actor->GetFormID();
+        const char* actorName = actor->GetName();
+
+        std::vector<std::pair<std::uint32_t, float>> pairs;
+        const size_t count = std::min(lovers.size(), weights.size());
+        pairs.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            if (lovers[i]) {
+                pairs.emplace_back(lovers[i]->GetFormID(), weights[i]);
+                SKSE::log::debug("  weight: lover=0x{:X} weight={}", lovers[i]->GetFormID(), weights[i]);
+            }
+        }
+
+        SKSE::log::info("Orgasm credit: thread {} actor {:X} ({}) mode=engine lovers={}", threadID, formID,
+                        actorName ? actorName : "Unknown", pairs.size());
+        LL::ThreadsCollector::GetSingleton().ExcitementContributorOrgasmWeighted(threadID, formID, pairs);
     }
 
     void UpdateExcitementRate(RE::StaticFunctionTag*, std::int32_t threadID, RE::Actor* actor, RE::Actor* lover,
@@ -173,6 +197,8 @@ namespace OTC_Papyrus {
 
         // Excitement contribution
         a_vm->RegisterFunction("ExcitementContributorOrgasm", "TTLL_ThreadsCollector", ExcitementContributorOrgasm);
+        a_vm->RegisterFunction("ExcitementContributorOrgasmWeighted", "TTLL_ThreadsCollector",
+                               ExcitementContributorOrgasmWeighted);
         a_vm->RegisterFunction("UpdateExcitementRate", "TTLL_ThreadsCollector", UpdateExcitementRate);
 
         // Apply thread data to ledger
