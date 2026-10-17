@@ -185,23 +185,49 @@ namespace LL {
         }
 
         auto& contributors = actorIt->second.excitementContribution.contributors;
-
-        // Calculate total contribution
-        float totalContribution = 0.0f;
-        for (const auto& [_, contrib] : contributors) {
-            totalContribution += contrib.total;
-        }
-
-        if (totalContribution <= 0.0f) {
+        if (contributors.empty()) {
             return;
         }
 
-        // Distribute orgasm shares proportionally
+        // Flush accrual up to now so the time since the last rate change counts
+        const double currentTime = GetCurrentTimestamp();
+        float totalContribution = 0.0f;
         for (auto& [_, contrib] : contributors) {
-            float share = contrib.total / totalContribution;
-            contrib.orgasms += share;
+            if (contrib.lastUpdated > 0.0) {
+                contrib.total += static_cast<float>((currentTime - contrib.lastUpdated) * contrib.rate);
+            }
+            contrib.lastUpdated = currentTime;
+            totalContribution += contrib.total;
+        }
+
+        if (totalContribution > 0.0f) {
+            // Distribute orgasm shares proportionally
+            for (auto& [_, contrib] : contributors) {
+                contrib.orgasms += contrib.total / totalContribution;
+            }
+        } else {
+            // Nothing accrued yet: split evenly across active partners, else across all partners
+            std::vector<ExcitementContributor*> recipients;
+            for (auto& [loverFormID, contrib] : contributors) {
+                if (loverFormID != actorFormID && contrib.rate > 0.0f) {
+                    recipients.push_back(&contrib);
+                }
+            }
+            if (recipients.empty()) {
+                for (auto& [loverFormID, contrib] : contributors) {
+                    if (loverFormID != actorFormID) {
+                        recipients.push_back(&contrib);
+                    }
+                }
+            }
+            for (auto* contrib : recipients) {
+                contrib->orgasms += 1.0f / static_cast<float>(recipients.size());
+            }
+        }
+
+        // Reset totals but keep rates, so accrual continues until the next scene change
+        for (auto& [_, contrib] : contributors) {
             contrib.total = 0.0f;
-            contrib.rate = 0.0f;
         }
     }
 
@@ -209,21 +235,20 @@ namespace LL {
                                                 std::uint32_t loverFormID, float rate) {
         std::unique_lock lock(_mutex);
 
-        auto& thread = _threads[threadID];
-        auto& contributor = thread.actors[actorFormID].excitementContribution.contributors[loverFormID];
+        auto& contributor = _threads[threadID].actors[actorFormID].excitementContribution.contributors[loverFormID];
 
         // Get current timestamp
         double currentTime = GetCurrentTimestamp();
 
-        // Calculate delta time and add accumulated excitement
-        if (thread.prevExcitementStarted > 0.0) {
-            double delta = currentTime - thread.prevExcitementStarted;
+        // Accrue with the previous rate since this contributor's last update
+        if (contributor.lastUpdated > 0.0) {
+            double delta = currentTime - contributor.lastUpdated;
             contributor.total += static_cast<float>(delta * contributor.rate);
         }
 
         // Update rate and timestamp
         contributor.rate = rate;
-        thread.prevExcitementStarted = currentTime;
+        contributor.lastUpdated = currentTime;
     }
 
     // ========================================================================================
