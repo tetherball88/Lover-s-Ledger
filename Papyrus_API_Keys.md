@@ -56,7 +56,8 @@ These keys are used with `IncrementInt` to increase a value by 1.
 | `solosex` |
 | `exclusivesex` |
 | `groupsex` |
-| `otherscount` |
+
+*`otherscount` is not accepted here; it is incremented automatically when a scene involves a non-unique partner.*
 
 ## Action Recording
 
@@ -68,6 +69,15 @@ Used with `RecordAction(Actor npc, String actionName, Bool isDid)`.
 | `isDid` | `true` if the NPC performed the act; `false` if they received it. |
 
 *Note: Calling `RecordAction` automatically updates the corresponding `actions_did.<ActionName>` or `actions_got.<ActionName>` counter.*
+
+## Thread IDs
+
+`TTLL_ThreadsCollector` functions and the `ttll_thread_data_event` mod event use one thread id space for both frameworks:
+
+| Range | Framework |
+| :--- | :--- |
+| `0` and above | OStim thread id (`0` is the player thread) |
+| `-1` to `-15` | SexLab thread, stored as `-1 - tid` (SexLab tid `0` is `-1`) |
 
 ## Return Type Notes
 

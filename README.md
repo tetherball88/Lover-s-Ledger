@@ -24,6 +24,7 @@ This README is a concise reference for what the mod actually implements, how to 
     - `TTLL_Store` (core API): get/set generic properties, record actions, query lovers/actions/score
     - `TTLL_ThreadsCollector` (runtime API): thread lifecycle, actor properties, excitement contributions
     - `TTLL_MainController`, `TTLL_OstimIntegration`: Papyrus-side glue that listens for OStim events and applies thread data to the ledger
+    - `TTLL_SexlabIntegration`: the same for SexLab (AE and P+). SexLab acts are mapped to OStim action names, so counts merge. SexLab threads use collector ids `-1` to `-15` (see `Papyrus_API_Keys.md`). P+-only calls live in `TTLL_SexlabPPlus` (`scripts/source_pplus`, built against the P+ sources; `scripts/source_headers` holds the stub the main scripts compile against)
     - `GetAllNPCs()` and `GetAllLovers()` now return `Form[]` (TESNPC base forms) instead of `Actor[]`
 
 - Relationship seeding (built-in, no external plugin required)
@@ -99,7 +100,7 @@ Notes on property paths: several functions accept dot-separated property paths (
   - SKSE (matching game version)
   - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
-  - SexLab (optional — the project includes a stub `TTLL_SexlabIntegration.psc` for custom integration)
+  - SexLab AE or SexLab P+ (optional — records SexLab scenes into the same ledger fields as OStim)
   - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v0.25.0+ (optional) — enables NPC bio decorators for AI-driven dialogue
 
 ## Installation
@@ -112,7 +113,7 @@ Notes on property paths: several functions accept dot-separated property paths (
 
   - If ledger entries aren't appearing:
     - Check `LoversLedger.log` in the SKSE log folder for errors/warnings
-    - Verify `ApplyThreadToLedger` is called on thread end (OStim integration calls this automatically when `hadSex` is true)
+    - Verify `ApplyThreadToLedger` is called on thread end (OStim and SexLab integrations call this automatically when `hadSex` is true)
 
 ## Developer notes
 

@@ -1,8 +1,508 @@
 scriptname TTLL_SexlabIntegration
 
+; SexLab (AE and P+) feeder for TTLL_ThreadsCollector.
+; SexLab tids 0-14 are stored under ThreadsCollector key -1 - tid (-1..-15) so they never collide with OStim ids.
+; Event handlers and the ChangeActors restart flags live on TTLL_MainController.
+;
+; Per-tid StorageUtil lists (on None, prefix TTLL_SL_):
+;   TG_/TR_/TT_/TX_ : current stage acts (giver, receiver, action type, receiver rate)
+;   EA_/EL_/ER_     : excitement pairs rated this stage (stimulated actor, lover, rate)
+;   PA_/PL_         : excitement pairs rated last stage
+
+int Function Key(int tid) global
+    return -1 - tid
+EndFunction
+
+bool Function IsPPlus() global
+    return SKSE.GetPluginVersion("SexLabUtil") > 20000
+EndFunction
+
 Function Maintenance(TTLL_MainController mainController, SexLabFramework slf) global
-    ; Here can be implemented Sexlab integration
-    ; I don't know what kind of information Sexlab provides or you can track
-    ; but if you want you can create integration with Sexlab
-    ; Call TTLL_Store functions to set/get different properties and to reference object shape at the beginning of that file
+    mainController.UnregisterForModEvent("HookAnimationStarting")
+    mainController.RegisterForModEvent("HookAnimationStarting", "SLAnimationStarting")
+    mainController.UnregisterForModEvent("HookAnimationStart")
+    mainController.RegisterForModEvent("HookAnimationStart", "SLAnimationStart")
+    mainController.UnregisterForModEvent("HookStageStart")
+    mainController.RegisterForModEvent("HookStageStart", "SLStageStart")
+    mainController.UnregisterForModEvent("HookAnimationChange")
+    mainController.RegisterForModEvent("HookAnimationChange", "SLAnimationChange")
+    mainController.UnregisterForModEvent("HookActorChangeStart")
+    mainController.RegisterForModEvent("HookActorChangeStart", "SLActorChangeStart")
+    mainController.UnregisterForModEvent("HookActorChangeEnd")
+    mainController.RegisterForModEvent("HookActorChangeEnd", "SLActorChangeEnd")
+    mainController.UnregisterForModEvent("HookAnimationEnd")
+    mainController.RegisterForModEvent("HookAnimationEnd", "SLAnimationEnd")
+    ; Once per actor orgasm on both builds; HookOrgasmStart / SexLabOrgasmSeparate would double count
+    mainController.UnregisterForModEvent("SexLabOrgasm")
+    mainController.RegisterForModEvent("SexLabOrgasm", "SLOrgasm")
+
+    ; Collector data is runtime only; the next StageStart rebuilds the lists
+    StorageUtil.ClearAllPrefix("TTLL_SL_")
+EndFunction
+
+; ========================================================================================
+; Thread lifecycle
+; ========================================================================================
+
+Function StartThread(int tid) global
+    TTLL_ThreadsCollector.CleanThread(Key(tid))
+    ClearLists(tid)
+EndFunction
+
+Function OnEnd(int tid) global
+    int threadKey = Key(tid)
+    if(TTLL_ThreadsCollector.GetThreadBool(threadKey, "hadSex"))
+        TTLL_ThreadsCollector.ApplyThreadToLedger(threadKey)
+        TTLL_Utils.SendThreadDataEvent(threadKey)
+    endif
+    TTLL_ThreadsCollector.SetThreadBool(threadKey, "finished", true)
+    ClearLists(tid)
+EndFunction
+
+Function ClearLists(int tid) global
+    ClearActs(tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_EA_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_EL_" + tid)
+    StorageUtil.FloatListClear(none, "TTLL_SL_ER_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_PA_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_PL_" + tid)
+EndFunction
+
+Function ClearActs(int tid) global
+    StorageUtil.FormListClear(none, "TTLL_SL_TG_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_TR_" + tid)
+    StorageUtil.StringListClear(none, "TTLL_SL_TT_" + tid)
+    StorageUtil.FloatListClear(none, "TTLL_SL_TX_" + tid)
+EndFunction
+
+; ========================================================================================
+; Stage processing (idempotent: AnimationStart, StageStart and AnimationChange all call it)
+; ========================================================================================
+
+Function ProcessStage(SexLabFramework slf, int tid) global
+    sslThreadController thread = slf.GetController(tid)
+    if !thread
+        return
+    endif
+    Actor[] positions = thread.Positions
+    if positions.Length == 0
+        return
+    endif
+    bool pplus = IsPPlus()
+
+    ClearActs(tid)
+    if positions.Length == 1
+        AddSoloAct(slf, thread, tid, positions[0], pplus)
+    else
+        bool usedInteractions = false
+        if pplus && TTLL_SexlabPPlus.IsInteractionRegistered(thread)
+            usedInteractions = AddInteractionActs(thread, tid, positions)
+        endif
+        AddTagActs(slf, thread, tid, positions, pplus, usedInteractions)
+    endif
+
+    ApplyActs(slf, thread, tid, pplus)
+EndFunction
+
+Function AddAct(int tid, Actor giver, Actor receiver, string actionType, float rate) global
+    if !giver || !receiver
+        return
+    endif
+    StorageUtil.FormListAdd(none, "TTLL_SL_TG_" + tid, giver)
+    StorageUtil.FormListAdd(none, "TTLL_SL_TR_" + tid, receiver)
+    StorageUtil.StringListAdd(none, "TTLL_SL_TT_" + tid, actionType)
+    StorageUtil.FloatListAdd(none, "TTLL_SL_TX_" + tid, rate)
+EndFunction
+
+Function AddSoloAct(SexLabFramework slf, sslThreadController thread, int tid, Actor npc, bool pplus) global
+    if !HasTag(thread, pplus, "Masturbation") && !HasTag(thread, pplus, "Solo")
+        return
+    endif
+    if HasPenis(slf, npc, pplus)
+        AddAct(tid, npc, npc, "malemasturbation", 1.0)
+    else
+        AddAct(tid, npc, npc, "femalemasturbation", 1.0)
+    endif
+EndFunction
+
+; P+ collision data. GetInteractionTypes(position, partner) describes what position does with partner.
+bool Function AddInteractionActs(sslThreadController thread, int tid, Actor[] positions) global
+    bool found = false
+    int i = 0
+    while i < positions.Length
+        int j = 0
+        while j < positions.Length
+            if i != j
+                Actor pos = positions[i]
+                Actor partner = positions[j]
+                int[] types = TTLL_SexlabPPlus.GetInteractionTypes(thread, pos, partner)
+                int t = 0
+                while t < types.Length
+                    int ctype = types[t]
+                    if ctype == 1 ; position is penetrated vaginally
+                        AddAct(tid, partner, pos, "vaginalsex", 1.0)
+                        found = true
+                    elseif ctype == 2 ; position is penetrated anally
+                        AddAct(tid, partner, pos, "analsex", 1.0)
+                        found = true
+                    elseif ctype == 3 ; position licks/sucks partner
+                        int partnerSex = TTLL_SexlabPPlus.GetSex(partner)
+                        if partnerSex == 1 || partnerSex == 4
+                            AddAct(tid, pos, partner, "cunnilingus", 0.8)
+                        else
+                            AddAct(tid, pos, partner, "blowjob", 0.8)
+                        endif
+                        found = true
+                    elseif ctype == 4 ; grinding, mutual: record the pair once
+                        if i < j || TTLL_SexlabPPlus.GetInteractionTypes(thread, partner, pos).Find(4) < 0
+                            AddAct(tid, partner, pos, "tribbing", 0.8)
+                            AddAct(tid, pos, partner, "tribbing", 0.8)
+                        endif
+                        found = true
+                    elseif ctype == 5
+                        AddAct(tid, pos, partner, "deepthroat", 0.8)
+                        found = true
+                    elseif ctype == 7
+                        AddAct(tid, pos, partner, "blowjob", 0.8)
+                        found = true
+                    elseif ctype == 8
+                        AddAct(tid, pos, partner, "footjob", 0.5)
+                        found = true
+                    elseif ctype == 9
+                        AddAct(tid, pos, partner, "handjob", 0.5)
+                        found = true
+                    endif
+                    ; 6 skullfuck, 10 kissing, 11 facial, 12 anim object, 13 toes: not recorded
+                    t += 1
+                endwhile
+            endif
+            j += 1
+        endwhile
+        i += 1
+    endwhile
+    return found
+EndFunction
+
+; Tag convention: position 0 receives, positions 1+ give toward position 0.
+; With P+ interactions, only acts that have no CTYPE are read from tags.
+Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Actor[] positions, bool pplus, bool usedInteractions) global
+    Actor receiver = positions[0]
+    Actor partner = positions[1]
+    int i
+
+    if !usedInteractions
+        bool matched = false
+        if HasTag(thread, pplus, "Vaginal")
+            string penetration = "analsex"
+            if HasVagina(slf, receiver, pplus)
+                penetration = "vaginalsex"
+            endif
+            i = 1
+            while i < positions.Length
+                AddAct(tid, positions[i], receiver, penetration, 1.0)
+                i += 1
+            endwhile
+            matched = true
+        endif
+        if HasTag(thread, pplus, "Anal")
+            i = 1
+            while i < positions.Length
+                AddAct(tid, positions[i], receiver, "analsex", 1.0)
+                i += 1
+            endwhile
+            matched = true
+        endif
+
+        bool blowjob = HasTag(thread, pplus, "Blowjob")
+        bool cunnilingus = HasTag(thread, pplus, "Cunnilingus")
+        if blowjob
+            AddAct(tid, receiver, partner, "blowjob", 0.8)
+        endif
+        if cunnilingus
+            AddAct(tid, partner, receiver, "cunnilingus", 0.8)
+        endif
+        if !blowjob && !cunnilingus && HasTag(thread, pplus, "Oral")
+            if HasPenis(slf, partner, pplus)
+                AddAct(tid, receiver, partner, "blowjob", 0.8)
+            else
+                AddAct(tid, partner, receiver, "cunnilingus", 0.8)
+            endif
+            matched = true
+        endif
+        matched = matched || blowjob || cunnilingus
+
+        if HasTag(thread, pplus, "Handjob")
+            AddAct(tid, receiver, partner, "handjob", 0.5)
+            matched = true
+        endif
+        if HasTag(thread, pplus, "Footjob")
+            AddAct(tid, receiver, partner, "footjob", 0.5)
+            matched = true
+        endif
+
+        if !matched && (HasTag(thread, pplus, "Tribadism") || HasTag(thread, pplus, "Grinding") || HasTag(thread, pplus, "Lesbian"))
+            AddAct(tid, partner, receiver, "tribbing", 0.8)
+            AddAct(tid, receiver, partner, "tribbing", 0.8)
+        endif
+    endif
+
+    ; No CTYPE exists for these
+    if HasTag(thread, pplus, "Boobjob")
+        AddAct(tid, receiver, partner, "boobjob", 0.5)
+    endif
+    if HasTag(thread, pplus, "Fisting")
+        AddAct(tid, partner, receiver, "vaginalfisting", 0.6)
+    elseif HasTag(thread, pplus, "Fingering")
+        AddAct(tid, partner, receiver, "vaginalfingering", 0.6)
+    endif
+EndFunction
+
+Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, bool pplus) global
+    int threadKey = Key(tid)
+    MoveExcitementToPrevious(tid)
+
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_TG_" + tid)
+    if count > 0
+        TTLL_ThreadsCollector.SetThreadBool(threadKey, "hadSex", true)
+        TTLL_ThreadsCollector.SetThreadStr(threadKey, "lastSexualSceneId", SceneId(thread, pplus))
+    endif
+
+    int i = 0
+    while i < count
+        Actor giver = StorageUtil.FormListGet(none, "TTLL_SL_TG_" + tid, i) as Actor
+        Actor receiver = StorageUtil.FormListGet(none, "TTLL_SL_TR_" + tid, i) as Actor
+        string actionType = StorageUtil.StringListGet(none, "TTLL_SL_TT_" + tid, i)
+        float rate = StorageUtil.FloatListGet(none, "TTLL_SL_TX_" + tid, i)
+
+        TTLL_ThreadsCollector.SetActorBool(threadKey, giver, "did." + actionType, true)
+        TTLL_ThreadsCollector.SetActorBool(threadKey, receiver, "got." + actionType, true)
+
+        if giver != receiver
+            if giver.GetActorBase().GetSex() == receiver.GetActorBase().GetSex()
+                TTLL_ThreadsCollector.SetActorBool(threadKey, giver, "hadSameSexEncounter", true)
+                TTLL_ThreadsCollector.SetActorBool(threadKey, receiver, "hadSameSexEncounter", true)
+            endif
+            ; Both directions need a contributor, or the giver gets no lover row
+            AddExcitement(tid, receiver, giver, rate)
+            AddExcitement(tid, giver, receiver, GiverRate(actionType, rate))
+        endif
+        i += 1
+    endwhile
+
+    ApplyExcitement(tid)
+EndFunction
+
+float Function GiverRate(string actionType, float rate) global
+    if actionType == "vaginalsex" || actionType == "analsex" || actionType == "tribbing"
+        return rate
+    endif
+    return 0.2
+EndFunction
+
+; ========================================================================================
+; Excitement: rate only pairs that act; zero only pairs rated last stage
+; ========================================================================================
+
+Function MoveExcitementToPrevious(int tid) global
+    StorageUtil.FormListClear(none, "TTLL_SL_PA_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_PL_" + tid)
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_EA_" + tid)
+    int i = 0
+    while i < count
+        StorageUtil.FormListAdd(none, "TTLL_SL_PA_" + tid, StorageUtil.FormListGet(none, "TTLL_SL_EA_" + tid, i))
+        StorageUtil.FormListAdd(none, "TTLL_SL_PL_" + tid, StorageUtil.FormListGet(none, "TTLL_SL_EL_" + tid, i))
+        i += 1
+    endwhile
+    StorageUtil.FormListClear(none, "TTLL_SL_EA_" + tid)
+    StorageUtil.FormListClear(none, "TTLL_SL_EL_" + tid)
+    StorageUtil.FloatListClear(none, "TTLL_SL_ER_" + tid)
+EndFunction
+
+int Function FindPair(string prefixA, string prefixL, int tid, Actor npc, Actor lover) global
+    int count = StorageUtil.FormListCount(none, prefixA + tid)
+    int i = 0
+    while i < count
+        if StorageUtil.FormListGet(none, prefixA + tid, i) == npc && StorageUtil.FormListGet(none, prefixL + tid, i) == lover
+            return i
+        endif
+        i += 1
+    endwhile
+    return -1
+EndFunction
+
+Function AddExcitement(int tid, Actor npc, Actor lover, float rate) global
+    int index = FindPair("TTLL_SL_EA_", "TTLL_SL_EL_", tid, npc, lover)
+    if index >= 0
+        StorageUtil.FloatListSet(none, "TTLL_SL_ER_" + tid, index, StorageUtil.FloatListGet(none, "TTLL_SL_ER_" + tid, index) + rate)
+    else
+        StorageUtil.FormListAdd(none, "TTLL_SL_EA_" + tid, npc)
+        StorageUtil.FormListAdd(none, "TTLL_SL_EL_" + tid, lover)
+        StorageUtil.FloatListAdd(none, "TTLL_SL_ER_" + tid, rate)
+    endif
+EndFunction
+
+Function ApplyExcitement(int tid) global
+    int threadKey = Key(tid)
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_EA_" + tid)
+    int i = 0
+    while i < count
+        Actor npc = StorageUtil.FormListGet(none, "TTLL_SL_EA_" + tid, i) as Actor
+        Actor lover = StorageUtil.FormListGet(none, "TTLL_SL_EL_" + tid, i) as Actor
+        TTLL_ThreadsCollector.UpdateExcitementRate(threadKey, npc, lover, StorageUtil.FloatListGet(none, "TTLL_SL_ER_" + tid, i))
+        i += 1
+    endwhile
+
+    count = StorageUtil.FormListCount(none, "TTLL_SL_PA_" + tid)
+    i = 0
+    while i < count
+        Actor prevNpc = StorageUtil.FormListGet(none, "TTLL_SL_PA_" + tid, i) as Actor
+        Actor prevLover = StorageUtil.FormListGet(none, "TTLL_SL_PL_" + tid, i) as Actor
+        if FindPair("TTLL_SL_EA_", "TTLL_SL_EL_", tid, prevNpc, prevLover) < 0
+            TTLL_ThreadsCollector.UpdateExcitementRate(threadKey, prevNpc, prevLover, 0.0)
+        endif
+        i += 1
+    endwhile
+EndFunction
+
+; ========================================================================================
+; Orgasm
+; ========================================================================================
+
+Function OnOrgasm(SexLabFramework slf, Actor npc) global
+    if !npc
+        return
+    endif
+    int tid = slf.FindActorController(npc)
+    if tid < 0
+        return
+    endif
+    int threadKey = Key(tid)
+    ; Never add a bystander to the collector: the actor count decides solo / exclusive / group
+    if TTLL_ThreadsCollector.GetActors(threadKey).Find(npc) < 0
+        return
+    endif
+
+    TTLL_ThreadsCollector.SetActorBool(threadKey, npc, "orgasmed", true)
+
+    bool pplus = IsPPlus()
+    if HasPenis(slf, npc, pplus)
+        Actor target = FindInternalClimaxTarget(slf, tid, npc, pplus)
+        if target
+            TTLL_Utils.RecordInternalClimax(npc, target)
+        endif
+    endif
+
+    TTLL_ThreadsCollector.ExcitementContributorOrgasm(threadKey, npc)
+EndFunction
+
+Actor Function FindInternalClimaxTarget(SexLabFramework slf, int tid, Actor npc, bool pplus) global
+    sslThreadController thread = slf.GetController(tid)
+    if !thread
+        return none
+    endif
+    Actor[] positions = thread.Positions
+    int i
+
+    if pplus
+        ; Partner who is vaginally penetrated by npc
+        if TTLL_SexlabPPlus.IsInteractionRegistered(thread)
+            i = 0
+            while i < positions.Length
+                if positions[i] != npc && TTLL_SexlabPPlus.GetInteractionTypes(thread, positions[i], npc).Find(1) >= 0
+                    return positions[i]
+                endif
+                i += 1
+            endwhile
+        endif
+    else
+        sslBaseAnimation anim = thread.Animation
+        int source = positions.Find(npc)
+        if anim && source >= 0
+            int stage = thread.Stage
+            int penisCount = 0
+            i = 0
+            while i < positions.Length
+                if HasPenis(slf, positions[i], false)
+                    penisCount += 1
+                endif
+                i += 1
+            endwhile
+
+            bool hasCumData = false
+            i = 0
+            while i < positions.Length
+                if i != source
+                    int cumId = anim.GetCumID(i, stage)
+                    if cumId == 1 || cumId == 4 || cumId == 5 || cumId == 7
+                        hasCumData = true
+                        int cumSource = anim.GetCumSource(i, stage)
+                        ; -1 means any source: only trust it with a single penis in the scene
+                        if cumSource == source || (cumSource == -1 && penisCount == 1)
+                            return positions[i]
+                        endif
+                    endif
+                endif
+                i += 1
+            endwhile
+            if hasCumData
+                ; Vaginal cum data exists but names another source, or is ambiguous
+                return none
+            endif
+        endif
+    endif
+
+    ; Fallback: this stage's vaginalsex act with npc as giver
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_TG_" + tid)
+    i = 0
+    while i < count
+        if StorageUtil.StringListGet(none, "TTLL_SL_TT_" + tid, i) == "vaginalsex" && StorageUtil.FormListGet(none, "TTLL_SL_TG_" + tid, i) == npc
+            return StorageUtil.FormListGet(none, "TTLL_SL_TR_" + tid, i) as Actor
+        endif
+        i += 1
+    endwhile
+    return none
+EndFunction
+
+; ========================================================================================
+; Framework helpers
+; ========================================================================================
+
+; P+ animation proxies have empty tags (HasTag is always true), so P+ reads the active stage's tags
+bool Function HasTag(sslThreadController thread, bool pplus, string tag) global
+    if pplus
+        return TTLL_SexlabPPlus.HasStageTag(thread, tag)
+    endif
+    sslBaseAnimation anim = thread.Animation
+    return anim && anim.HasTag(tag)
+EndFunction
+
+string Function SceneId(sslThreadController thread, bool pplus) global
+    if pplus
+        return TTLL_SexlabPPlus.SceneId(thread)
+    endif
+    sslBaseAnimation anim = thread.Animation
+    if anim
+        return anim.Registry
+    endif
+    return ""
+EndFunction
+
+; AE GetGender: 0 male, 1 female, 2 creature male, 3 creature female (gender faction overrides apply)
+; P+ GetSex: 0 male, 1 female, 2 futa, 3 creature male, 4 creature female
+bool Function HasPenis(SexLabFramework slf, Actor npc, bool pplus) global
+    if pplus
+        int sex = TTLL_SexlabPPlus.GetSex(npc)
+        return sex == 0 || sex == 2 || sex == 3
+    endif
+    int gender = slf.GetGender(npc)
+    return gender == 0 || gender == 2
+EndFunction
+
+bool Function HasVagina(SexLabFramework slf, Actor npc, bool pplus) global
+    if pplus
+        int sex = TTLL_SexlabPPlus.GetSex(npc)
+        return sex == 1 || sex == 2 || sex == 4
+    endif
+    int gender = slf.GetGender(npc)
+    return gender == 1 || gender == 3
 EndFunction
