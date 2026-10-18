@@ -12,6 +12,35 @@ namespace LL {
     // Serialization constants
     constexpr std::uint32_t kSerializationVersion = 2;
     constexpr std::uint32_t kSerializationType = 'LLGR';  // LoversLedger
+    // Global scene counters live in their own record so older DLLs skip them cleanly
+    constexpr std::uint32_t kSceneCountsVersion = 1;
+    constexpr std::uint32_t kSceneCountsType = 'LLSC';  // LoversLedger Scene Counts
+
+    // Directions for ActKey::dir
+    constexpr std::uint8_t kActDirAny = 0;
+    constexpr std::uint8_t kActDirGave = 1;
+    constexpr std::uint8_t kActDirReceived = 2;
+
+    // Global scene counter key; each field has an "any" value so wildcard queries are a single lookup
+    struct ActKey {
+        std::uint32_t raceFormID{0};  // 0 = any race
+        std::int8_t gender{-1};       // -1 = any, 0 = male, 1 = female
+        std::string type;             // "" = any act, lowercased
+        std::uint8_t dir{kActDirAny};
+
+        bool operator==(const ActKey&) const = default;
+        auto operator<=>(const ActKey&) const = default;
+    };
+
+    struct ActKeyHash {
+        std::size_t operator()(const ActKey& k) const noexcept {
+            std::size_t h = std::hash<std::string>{}(k.type);
+            h ^= std::hash<std::uint64_t>{}((std::uint64_t(k.raceFormID) << 16) |
+                                            (std::uint64_t(std::uint8_t(k.gender)) << 8) | k.dir) +
+                 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+            return h;
+        }
+    };
 
     struct InternalClimax {
         int did{0};
@@ -114,6 +143,20 @@ namespace LL {
         // Returns: calculated score, or 0.0f if NPC or lover not found
         float GetLoverScore(std::uint32_t npcFormID, std::uint32_t loverFormID) const;
 
+        // Global scene counters (all participants, unique or not)
+        // keys: per-scene deduplicated set, already wildcard-expanded; each key is bumped once
+        void RecordScene(const std::vector<ActKey>& keys, int actorCount);
+        // Scenes where a participant matched race/gender/type/dir (0 / -1 / "" / kActDirAny = any)
+        int HowManyTimes(std::uint32_t raceFormID, int gender, std::string_view type, std::uint8_t dir) const;
+        // Scenes with exactly numActors participants; <= 0 returns all recorded scenes
+        int HowManyTimesWith(int numActors) const;
+
+        // Load action-name synonym clusters from Data/SKSE/Plugins/LoversLedger/synonyms.json.
+        // Each cluster's first member is its stored word; actions are recorded and queried under it.
+        void LoadSynonyms();
+        // Lowercased name mapped to its cluster word (unchanged if in no cluster). Map is fixed after data load.
+        std::string Canonical(std::string_view name) const;
+
         // SKSE Serialization
         void SaveCallback(SKSE::SerializationInterface* a_intfc);
         void LoadCallback(SKSE::SerializationInterface* a_intfc);
@@ -152,6 +195,10 @@ namespace LL {
         // Caller must hold shared_lock or unique_lock
         static float ScoreLover(const LoverData& lover);
 
+        // Scene counter record; SaveSceneCounts expects the caller to hold the lock
+        void SaveSceneCounts(SKSE::SerializationInterface* a_intfc) const;
+        void LoadSceneCounts(SKSE::SerializationInterface* a_intfc, std::uint32_t version);
+
         // v1 → v2 migration helpers
         static bool IsTempFormID(std::uint32_t id) noexcept { return (id >> 24) == 0xFF; }
         // Classify and migrate one legacy entry. Mutates legacyData.lovers to remove resolved lovers.
@@ -171,6 +218,14 @@ namespace LL {
         // Set to true once ScanAllGameRelationships completes; persisted in the SKSE save
         // so the scan does not repeat on subsequent loads of the same playthrough.
         bool _globalRelationsScanDone{false};
+
+        // Global scene counters; saved in the kSceneCountsType record
+        std::unordered_map<ActKey, int, ActKeyHash> _actCounts;
+        std::unordered_map<int, int> _actorCountScenes;  // key 0 = all scenes
+
+        // Action-name synonyms: member -> cluster word; loaded once at data load
+        std::unordered_map<std::string, std::string> _canonical;
+        void CanonicalizeActions(NPCData& npc) const;
 
         mutable std::shared_mutex _mutex;  // allow concurrent reads
     };

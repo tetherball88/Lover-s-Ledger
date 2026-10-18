@@ -120,6 +120,7 @@ SKSEPluginLoad(const LoadInterface* skse) {
 
                         // Load user-defined unique NPC overrides
                         LL::UniqueOverrides::GetSingleton().Load();
+                        LL::LoversLedgerService::GetSingleton().LoadSynonyms();
                         break;
                     }
 

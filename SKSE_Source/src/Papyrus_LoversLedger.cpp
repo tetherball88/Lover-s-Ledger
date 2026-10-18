@@ -201,6 +201,26 @@ namespace LL_Papyrus {
         return result;
     }
 
+    // Global scene counters: None / -1 / "" = any; direction "gave" / "received", anything else = any
+    std::int32_t HowManyTimes(RE::StaticFunctionTag*, RE::TESRace* race, std::int32_t gender,
+                              RE::BSFixedString actionType, RE::BSFixedString direction) {
+        std::uint8_t dir = LL::kActDirAny;
+        if (_stricmp(direction.c_str(), "gave") == 0) {
+            dir = LL::kActDirGave;
+        } else if (_stricmp(direction.c_str(), "received") == 0) {
+            dir = LL::kActDirReceived;
+        }
+        auto result = LL::LoversLedgerService::GetSingleton().HowManyTimes(
+            race ? race->GetFormID() : 0, gender, actionType.c_str(), dir);
+        SKSE::log::trace("HowManyTimes: race=0x{:X}, gender={}, type={}, dir={}, result={}",
+                         race ? race->GetFormID() : 0, gender, actionType.c_str(), dir, result);
+        return result;
+    }
+
+    std::int32_t HowManyTimesWith(RE::StaticFunctionTag*, std::int32_t numActors) {
+        return LL::LoversLedgerService::GetSingleton().HowManyTimesWith(numActors);
+    }
+
     // Calculate lover score based on encounters, orgasms, and time decay
     float GetLoverScore(RE::StaticFunctionTag*, RE::Actor* npc, RE::Actor* lover) {
         if (!npc || !lover) { SKSE::log::warn("GetLoverScore: null actor"); return 0.0f; }
@@ -230,6 +250,8 @@ namespace LL_Papyrus {
         a_vm->RegisterFunction("RecordAction", "TTLL_Store", RecordAction);
         a_vm->RegisterFunction("GetAllActions", "TTLL_Store", GetAllActions);
         a_vm->RegisterFunction("GetActionCount", "TTLL_Store", GetActionCount);
+        a_vm->RegisterFunction("HowManyTimes", "TTLL_Store", HowManyTimes);
+        a_vm->RegisterFunction("HowManyTimesWith", "TTLL_Store", HowManyTimesWith);
 
         a_vm->RegisterFunction("IncrementInt", "TTLL_Store", IncrementInt);
 

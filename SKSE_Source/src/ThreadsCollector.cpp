@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 #include "LoversLedgerService.h"
 #include "ThreadsCollector.h"
@@ -576,6 +577,41 @@ namespace LL {
                 }
             }
         }
+
+        // Helper: Add the wildcard-expanded global counter keys for one actor's acts.
+        // Counts every participant (unique or not); skips actors that are no longer loaded.
+        void CollectActKeys(std::uint32_t actorFormID, const ThreadActor& actorData, std::set<LL::ActKey>& keys) {
+            auto* form = RE::TESForm::LookupByID(actorFormID);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            auto* base = actor ? actor->GetActorBase() : nullptr;
+            if (!base) {
+                SKSE::log::trace("CollectActKeys: actor 0x{:X} not loaded, skipping", actorFormID);
+                return;
+            }
+            auto* race = actor->GetRace();
+            const std::uint32_t raceID = race ? race->GetFormID() : 0;
+            const auto gender = static_cast<std::int8_t>(base->GetSex());
+
+            auto addAct = [&](const std::string& rawType, std::uint8_t dir) {
+                // Cluster word: two synonyms in one scene collapse to one key in the set
+                const std::string type = LL::LoversLedgerService::GetSingleton().Canonical(rawType);
+                for (std::uint32_t r : {raceID, 0u}) {
+                    for (std::int8_t g : {gender, std::int8_t(-1)}) {
+                        for (const std::string& t : {type, std::string()}) {
+                            for (std::uint8_t d : {dir, LL::kActDirAny}) {
+                                keys.insert(LL::ActKey{r, g, t, d});
+                            }
+                        }
+                    }
+                }
+            };
+            for (const auto& [type, _] : actorData.did) {
+                addAct(type, LL::kActDirGave);
+            }
+            for (const auto& [type, _] : actorData.got) {
+                addAct(type, LL::kActDirReceived);
+            }
+        }
     }  // namespace
 
     void ThreadsCollector::ApplyThreadToLedger(std::int32_t threadID) {
@@ -595,11 +631,14 @@ namespace LL {
         auto& ledger = LL::LoversLedgerService::GetSingleton();
 
         // Process each actor in the thread
+        std::set<LL::ActKey> actKeys;
         for (const auto& [actorFormID, actorData] : thread->actors) {
             ApplyActorBasicData(ledger, actorFormID, actorData, encounterType);
             ApplyActorActions(ledger, actorFormID, actorData);
             ApplyExcitementContributions(ledger, actorFormID, actorData, actorCount);
+            CollectActKeys(actorFormID, actorData, actKeys);
         }
+        ledger.RecordScene({actKeys.begin(), actKeys.end()}, static_cast<int>(actorCount));
 
         SKSE::log::info("ThreadsCollector: Applied thread {} data to ledger ({} actors)", threadID, actorCount);
     }

@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+
+#include <nlohmann/json.hpp>
 
 #include "UniqueOverrides.h"
 
@@ -521,8 +525,8 @@ namespace LL {
         SKSE::log::debug("UpdateActions: npc=0x{:X}, didGot={}, {} actions", npcFormID, didGot, actions.size());
 
         for (const auto& action : actions) {
-            ++actionMap[ToLower(action)];
-            SKSE::log::trace("  Action '{}' count now: {}", action, actionMap[ToLower(action)]);
+            const int count = ++actionMap[Canonical(action)];
+            SKSE::log::trace("  Action '{}' count now: {}", action, count);
         }
     }
 
@@ -1038,8 +1042,74 @@ namespace LL {
         }
 
         const auto& actionMap = SelectActionMap<std::unordered_map<std::string, int>>(*npc, isDid);
-        auto it = actionMap.find(ToLower(actionName));
+        auto it = actionMap.find(Canonical(actionName));
         return (it != actionMap.end()) ? it->second : 0;
+    }
+
+    std::string LoversLedgerService::Canonical(std::string_view name) const {
+        std::string lower = ToLower(name);
+        auto it = _canonical.find(lower);
+        return (it != _canonical.end()) ? it->second : lower;
+    }
+
+    void LoversLedgerService::CanonicalizeActions(NPCData& npc) const {
+        for (auto* map : {&npc.actions_did, &npc.actions_got}) {
+            std::unordered_map<std::string, int> merged;
+            for (const auto& [name, count] : *map) merged[Canonical(name)] += count;
+            *map = std::move(merged);
+        }
+    }
+
+    void LoversLedgerService::LoadSynonyms() {
+        const std::filesystem::path path = "Data/SKSE/Plugins/LoversLedger/synonyms.json";
+        std::unordered_map<std::string, std::string> canonical;
+        int clusters = 0;
+        try {
+            std::ifstream file(path);
+            if (!file.is_open()) {
+                SKSE::log::warn("LoadSynonyms: '{}' not found, action names match exactly", path.string());
+                return;
+            }
+            const auto json = nlohmann::json::parse(file);
+            for (const auto& cluster : json.at("clusters")) {
+                if (cluster.empty()) continue;
+                // First member is the stored word; a name in two clusters keeps its first cluster
+                const std::string word = ToLower(cluster.front().get<std::string>());
+                for (const auto& m : cluster) canonical.try_emplace(ToLower(m.get<std::string>()), word);
+                ++clusters;
+            }
+        } catch (const std::exception& e) {
+            SKSE::log::warn("LoadSynonyms: failed to parse '{}': {}; action names match exactly", path.string(),
+                            e.what());
+            return;
+        }
+        std::unique_lock lock(_mutex);
+        _canonical = std::move(canonical);
+        SKSE::log::info("LoadSynonyms: loaded {} synonym clusters", clusters);
+    }
+
+    void LoversLedgerService::RecordScene(const std::vector<ActKey>& keys, int actorCount) {
+        std::unique_lock lock(_mutex);
+        for (const auto& key : keys) {
+            ++_actCounts[key];
+        }
+        ++_actorCountScenes[actorCount];
+        ++_actorCountScenes[0];
+        SKSE::log::debug("RecordScene: {} actors, {} counter keys", actorCount, keys.size());
+    }
+
+    int LoversLedgerService::HowManyTimes(std::uint32_t raceFormID, int gender, std::string_view type,
+                                          std::uint8_t dir) const {
+        ActKey key{raceFormID, static_cast<std::int8_t>(gender < 0 ? -1 : gender), Canonical(type), dir};
+        std::shared_lock lock(_mutex);
+        auto it = _actCounts.find(key);
+        return (it != _actCounts.end()) ? it->second : 0;
+    }
+
+    int LoversLedgerService::HowManyTimesWith(int numActors) const {
+        std::shared_lock lock(_mutex);
+        auto it = _actorCountScenes.find(numActors > 0 ? numActors : 0);
+        return (it != _actorCountScenes.end()) ? it->second : 0;
     }
 
     float LoversLedgerService::GetLoverScore(std::uint32_t npcFormID, std::uint32_t loverFormID) const {
@@ -1104,6 +1174,8 @@ namespace LL {
         _store.clear();
         _legacyStore.clear();
         _globalRelationsScanDone = false;
+        _actCounts.clear();
+        _actorCountScenes.clear();
         SKSE::log::info("LoversLedgerService: All data cleared");
     }
 
@@ -1455,6 +1527,8 @@ namespace LL {
             npcData.Save(a_intfc, npcFormID);
         }
 
+        SaveSceneCounts(a_intfc);
+
         SKSE::log::info("LoversLedgerService: Save complete");
     }
 
@@ -1466,6 +1540,10 @@ namespace LL {
         std::uint32_t length;
 
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
+            if (type == kSceneCountsType) {
+                LoadSceneCounts(a_intfc, version);
+                continue;
+            }
             if (type != kSerializationType) {
                 continue;
             }
@@ -1525,6 +1603,7 @@ namespace LL {
                             SKSE::log::error("Failed to load NPC data for base FormID 0x{:X}", resolvedNPCID);
                             continue;
                         }
+                        CanonicalizeActions(npcData);
                         _store[resolvedNPCID] = std::move(npcData);
                     } else {
                         // v1: NPC key is a raw Actor refFormID — store as-is in legacyStore for later migration
@@ -1533,6 +1612,7 @@ namespace LL {
                             SKSE::log::error("Failed to load legacy NPC data for formID 0x{:X}", npcFormID);
                             continue;
                         }
+                        CanonicalizeActions(npcData);
                         _legacyStore[npcFormID] = std::move(npcData);
                     }
                 }
@@ -1541,6 +1621,83 @@ namespace LL {
                                 _store.size(), _legacyStore.size());
             }  // lock released here
         }
+    }
+
+    // Caller must hold the lock
+    void LoversLedgerService::SaveSceneCounts(SKSE::SerializationInterface* a_intfc) const {
+        if (!a_intfc->OpenRecord(kSceneCountsType, kSceneCountsVersion)) {
+            SKSE::log::error("Failed to open scene counts record");
+            return;
+        }
+
+        std::uint32_t count = static_cast<std::uint32_t>(_actCounts.size());
+        if (!WriteData(a_intfc, count, "SceneCounts.act count")) return;
+        for (const auto& [key, value] : _actCounts) {
+            if (!WriteData(a_intfc, key.raceFormID, "ActKey.race") || !WriteData(a_intfc, key.gender, "ActKey.gender") ||
+                !SaveString(a_intfc, key.type, "ActKey.type") || !WriteData(a_intfc, key.dir, "ActKey.dir") ||
+                !WriteData(a_intfc, value, "ActKey.count")) {
+                return;
+            }
+        }
+
+        count = static_cast<std::uint32_t>(_actorCountScenes.size());
+        if (!WriteData(a_intfc, count, "SceneCounts.actorCount count")) return;
+        for (const auto& [numActors, value] : _actorCountScenes) {
+            if (!WriteData(a_intfc, numActors, "ActorCount.n") || !WriteData(a_intfc, value, "ActorCount.count")) {
+                return;
+            }
+        }
+        SKSE::log::info("Saved scene counts: {} act keys, {} actor-count buckets", _actCounts.size(),
+                        _actorCountScenes.size());
+    }
+
+    void LoversLedgerService::LoadSceneCounts(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        if (version != kSceneCountsVersion) {
+            SKSE::log::error("Unsupported scene counts version: {}", version);
+            return;
+        }
+
+        std::unordered_map<ActKey, int, ActKeyHash> actCounts;
+        std::unordered_map<int, int> actorCountScenes;
+
+        std::uint32_t count = 0;
+        if (!ReadData(a_intfc, count, "SceneCounts.act count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            ActKey key;
+            int value = 0;
+            if (!ReadData(a_intfc, key.raceFormID, "ActKey.race") || !ReadData(a_intfc, key.gender, "ActKey.gender") ||
+                !LoadString(a_intfc, key.type, "ActKey.type") || !ReadData(a_intfc, key.dir, "ActKey.dir") ||
+                !ReadData(a_intfc, value, "ActKey.count")) {
+                return;
+            }
+            if (key.raceFormID != 0) {
+                std::uint32_t resolved = 0;
+                if (!a_intfc->ResolveFormID(key.raceFormID, resolved)) {
+                    SKSE::log::warn("LoadSceneCounts: dropping counter for unresolved race 0x{:X}", key.raceFormID);
+                    continue;
+                }
+                key.raceFormID = resolved;
+            }
+            // Saves from before synonym words may hold one scene under two names of a cluster; merged here
+            key.type = Canonical(key.type);
+            actCounts[std::move(key)] += value;
+        }
+
+        if (!ReadData(a_intfc, count, "SceneCounts.actorCount count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            int numActors = 0;
+            int value = 0;
+            if (!ReadData(a_intfc, numActors, "ActorCount.n") || !ReadData(a_intfc, value, "ActorCount.count")) {
+                return;
+            }
+            actorCountScenes[numActors] = value;
+        }
+
+        std::unique_lock lock(_mutex);
+        _actCounts = std::move(actCounts);
+        _actorCountScenes = std::move(actorCountScenes);
+        SKSE::log::info("Loaded scene counts: {} act keys, {} actor-count buckets", _actCounts.size(),
+                        _actorCountScenes.size());
     }
 
     void LoversLedgerService::RevertCallback([[maybe_unused]] SKSE::SerializationInterface* a_intfc) {

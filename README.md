@@ -60,7 +60,9 @@ This README is a concise reference for what the mod actually implements, how to 
   - SetLoverFlt(Actor npc, Actor lover, String propName, Float value)
   - RecordAction(Actor npc, String actionName, Bool isDid)
   - GetAllActions(Actor npc, Bool isDid, Int topK = -1) -> String[]
-  - GetActionCount(Actor npc, Bool isDid, String actionName) -> Int
+  - GetActionCount(Actor npc, Bool isDid, String actionName) -> Int (actions are stored under each synonym cluster's first word in `SKSE/Plugins/LoversLedger/synonyms.json`, and actionName / HowManyTimes actionType are mapped to it, e.g. "analsex" and "ass" both read "anal"; names outside any cluster are kept as OStim or SexLab recorded them, so check with GetAllActions(npc, true))
+  - HowManyTimes(Race akRace = None, Int gender = -1, String actionType = "", String direction = "any") -> Int (global: scenes where any participant matching race/gender gave/received the act; None / -1 / "" = any; direction "any", "gave" or "received")
+  - HowManyTimesWith(Int numActors = 0) -> Int (global: scenes with exactly numActors participants; <= 0 = all scenes)
   - IncrementInt(Actor npc, String intName)
   - GetAllNPCs() -> **Form[]** (returns TESNPC base forms; cast to `ActorBase` for name/gender, `Actor` may be None if cell is unloaded)
   - GetAllLovers(Actor npc, Int topK = -1) -> **Form[]** (same as above)

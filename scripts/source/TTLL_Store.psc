@@ -84,6 +84,21 @@ String[] Function GetAllActions(Actor npc, Bool isDid, Int topK = -1) Global Nat
 Int Function GetActionCount(Actor npc, Bool isDid, String actionName) Global Native
 
 ; ========================================================================================
+; Global Scene Counters (every participant, unique or not; one count per scene)
+; ========================================================================================
+
+; Scenes where a participant of akRace/gender gave or received actionType
+; akRace: None = any race (exact Race form, so vampire variants are separate)
+; gender: -1 = any, 0 = male, 1 = female (ActorBase.GetSex)
+; actionType: "" = any act
+; direction: "any" (default), "gave", "received"
+; Example: HowManyTimes(None, 1, "anal") returns scenes where a female of any race had anal
+Int Function HowManyTimes(Race akRace = None, Int gender = -1, String actionType = "", String direction = "any") Global Native
+
+; Scenes with exactly numActors participants; numActors <= 0 returns all recorded scenes
+Int Function HowManyTimesWith(Int numActors = 0) Global Native
+
+; ========================================================================================
 ; Counter Functions
 ; ========================================================================================
 
