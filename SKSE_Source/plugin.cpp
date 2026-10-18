@@ -85,6 +85,8 @@ SKSEPluginLoad(const LoadInterface* skse) {
                 switch (message->type) {
                     case SKSE::MessagingInterface::kPreLoadGame:
                         SKSE::log::info("PreLoadGame...");
+                        // Scenes of the session being left are runtime only
+                        LL::ThreadsCollector::GetSingleton().ClearAll();
                         break;
 
                     case SKSE::MessagingInterface::kPostLoadGame:
@@ -95,6 +97,7 @@ SKSEPluginLoad(const LoadInterface* skse) {
 
                     case SKSE::MessagingInterface::kNewGame:
                         SKSE::log::info("New game started.");
+                        LL::ThreadsCollector::GetSingleton().ClearAll();
                         LL::LoversLedgerService::GetSingleton().ScanAllGameRelationships();
                         break;
 

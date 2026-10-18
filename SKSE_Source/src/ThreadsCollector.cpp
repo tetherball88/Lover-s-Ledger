@@ -486,8 +486,9 @@ namespace LL {
             auto* actor = form ? form->As<RE::Actor>() : nullptr;
             if (!actor) return {0, false};
             auto* base = LL::GetStableBase(actor);
+            if (!base) return {0, false};
             SKSE::log::debug("ResolveUniqueBaseID: 0x{:X}({}) -> base 0x{:X} ({})", refFormID, actor->GetName(), base->GetFormID(), base->GetName());
-            if (!base || !LL::IsEffectivelyUnique(base)) return {0, false};
+            if (!LL::IsEffectivelyUnique(base)) return {0, false};
             return {base->GetFormID(), true};
         }
 
@@ -580,7 +581,9 @@ namespace LL {
     void ThreadsCollector::ApplyThreadToLedger(std::int32_t threadID) {
         std::shared_lock lock(_mutex);
 
-        const auto* thread = FindThread(threadID);
+        // _mutex is not recursive: look up directly instead of FindThread
+        auto threadIt = _threads.find(threadID);
+        const auto* thread = (threadIt != _threads.end()) ? &threadIt->second : nullptr;
         if (!thread) {
             SKSE::log::warn("ThreadsCollector::ApplyThreadToLedger - Thread {} not found", threadID);
             return;

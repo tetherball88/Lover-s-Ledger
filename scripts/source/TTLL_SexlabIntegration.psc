@@ -126,6 +126,15 @@ Function AddAct(int tid, Actor giver, Actor receiver, string actionType, float r
     if !giver || !receiver
         return
     endif
+    ; One row per (giver, receiver, action): duplicates would sum into an outsized rate
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_TG_" + tid)
+    int i = 0
+    while i < count
+        if StorageUtil.FormListGet(none, "TTLL_SL_TG_" + tid, i) == giver && StorageUtil.FormListGet(none, "TTLL_SL_TR_" + tid, i) == receiver && StorageUtil.StringListGet(none, "TTLL_SL_TT_" + tid, i) == actionType
+            return
+        endif
+        i += 1
+    endwhile
     StorageUtil.FormListAdd(none, "TTLL_SL_TG_" + tid, giver)
     StorageUtil.FormListAdd(none, "TTLL_SL_TR_" + tid, receiver)
     StorageUtil.StringListAdd(none, "TTLL_SL_TT_" + tid, actionType)
@@ -215,19 +224,11 @@ Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Ac
             if HasVagina(slf, receiver, pplus)
                 penetration = "vaginalsex"
             endif
-            i = 1
-            while i < positions.Length
-                AddAct(tid, positions[i], receiver, penetration, 1.0)
-                i += 1
-            endwhile
+            AddPenetrationActs(slf, thread, tid, positions, penetration, pplus)
             matched = true
         endif
         if HasTag(thread, pplus, "Anal")
-            i = 1
-            while i < positions.Length
-                AddAct(tid, positions[i], receiver, "analsex", 1.0)
-                i += 1
-            endwhile
+            AddPenetrationActs(slf, thread, tid, positions, "analsex", pplus)
             matched = true
         endif
 
@@ -237,7 +238,30 @@ Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Ac
             AddAct(tid, receiver, partner, "blowjob", 0.8)
         endif
         if cunnilingus
-            AddAct(tid, partner, receiver, "cunnilingus", 0.8)
+            ; 3+ positions: a vagina at 1+ is licked by another position 1+ that is not penetrating position 0
+            int licked = -1
+            int licker = -1
+            if positions.Length > 2
+                i = 1
+                while i < positions.Length && licked < 0
+                    if HasVagina(slf, positions[i], pplus)
+                        licked = i
+                    endif
+                    i += 1
+                endwhile
+                i = 1
+                while licked >= 0 && i < positions.Length && licker < 0
+                    if i != licked && !IsActGiver(tid, positions[i], positions[0])
+                        licker = i
+                    endif
+                    i += 1
+                endwhile
+            endif
+            if licked >= 0 && licker >= 0
+                AddAct(tid, positions[licker], positions[licked], "cunnilingus", 0.8)
+            else
+                AddAct(tid, partner, receiver, "cunnilingus", 0.8)
+            endif
         endif
         if !blowjob && !cunnilingus && HasTag(thread, pplus, "Oral")
             if HasPenis(slf, partner, pplus)
@@ -275,17 +299,48 @@ Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Ac
     endif
 EndFunction
 
+; Positions 1+ wearing a strap-on penetrate position 0; else those with a penis; with none, position 1 does
+Function AddPenetrationActs(SexLabFramework slf, sslThreadController thread, int tid, Actor[] positions, string penetration, bool pplus) global
+    bool found = false
+    int i = 1
+    while i < positions.Length
+        if UsesStrapon(thread, positions[i], pplus)
+            AddAct(tid, positions[i], positions[0], penetration, 1.0)
+            found = true
+        endif
+        i += 1
+    endwhile
+    i = 1
+    while !found && i < positions.Length
+        if HasPenis(slf, positions[i], pplus)
+            AddAct(tid, positions[i], positions[0], penetration, 1.0)
+            found = true
+        endif
+        i += 1
+    endwhile
+    if !found
+        AddAct(tid, positions[1], positions[0], penetration, 1.0)
+    endif
+EndFunction
+
 Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, bool pplus) global
     int threadKey = Key(tid)
     MoveExcitementToPrevious(tid)
 
     int count = StorageUtil.FormListCount(none, "TTLL_SL_TG_" + tid)
+    int i = 0
     if count > 0
         TTLL_ThreadsCollector.SetThreadBool(threadKey, "hadSex", true)
         TTLL_ThreadsCollector.SetThreadStr(threadKey, "lastSexualSceneId", SceneId(thread, pplus))
+        ; Positions are participants even without an act (2-position tag acts in a 3-way): the actor count decides exclusive / group
+        Actor[] positions = thread.Positions
+        while i < positions.Length
+            TTLL_ThreadsCollector.SetActorInt(threadKey, positions[i], "participant", 0)
+            i += 1
+        endwhile
     endif
 
-    int i = 0
+    i = 0
     while i < count
         Actor giver = StorageUtil.FormListGet(none, "TTLL_SL_TG_" + tid, i) as Actor
         Actor receiver = StorageUtil.FormListGet(none, "TTLL_SL_TR_" + tid, i) as Actor
@@ -296,7 +351,8 @@ Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, boo
         TTLL_ThreadsCollector.SetActorBool(threadKey, receiver, "got." + actionType, true)
 
         if giver != receiver
-            if giver.GetActorBase().GetSex() == receiver.GetActorBase().GetSex()
+            ; SexLab gender (faction override, P+ futa), the same rule the act mapping uses
+            if HasPenis(slf, giver, pplus) == HasPenis(slf, receiver, pplus) && HasVagina(slf, giver, pplus) == HasVagina(slf, receiver, pplus)
                 TTLL_ThreadsCollector.SetActorBool(threadKey, giver, "hadSameSexEncounter", true)
                 TTLL_ThreadsCollector.SetActorBool(threadKey, receiver, "hadSameSexEncounter", true)
             endif
@@ -600,7 +656,7 @@ Actor Function FindInternalClimaxTarget(SexLabFramework slf, int tid, Actor npc,
             int penisCount = 0
             i = 0
             while i < positions.Length
-                if HasPenis(slf, positions[i], false)
+                if HasPenis(slf, positions[i], false) || UsesStrapon(thread, positions[i], false)
                     penisCount += 1
                 endif
                 i += 1
@@ -642,6 +698,53 @@ Actor Function FindInternalClimaxTarget(SexLabFramework slf, int tid, Actor npc,
 EndFunction
 
 ; ========================================================================================
+; SexLab stats: SexLab counts its own scenes; an OStim scene adds +1 per counter, like SexLab does.
+; Never overwrites: SexLab holds history the ledger does not (pre-install, unmapped scenes).
+; ========================================================================================
+
+Function AddOStimStats(SexLabFramework slf, int threadID) global
+    if !TTLL_ThreadsCollector.GetThreadBool(threadID, "hadSex")
+        return
+    endif
+    bool pplus = IsPPlus()
+    Actor[] actors = TTLL_ThreadsCollector.GetActors(threadID)
+    int total = (actors.Length > 1) as int
+    int solo = (actors.Length == 1) as int
+    int i = 0
+    while i < actors.Length
+        Actor npc = actors[i]
+        if npc
+            int vaginal = HadAction(threadID, npc, "vaginalsex") as int
+            int anal = HadAction(threadID, npc, "analsex") as int
+            int oral = (HadAction(threadID, npc, "blowjob") || HadAction(threadID, npc, "deepthroat") \
+                || HadAction(threadID, npc, "cunnilingus") || HadAction(threadID, npc, "anilingus") \
+                || HadAction(threadID, npc, "rimjob") || HadAction(threadID, npc, "lickingpenis") \
+                || HadAction(threadID, npc, "lickingvagina") || HadAction(threadID, npc, "lickingtesticles")) as int
+            if pplus
+                TTLL_SexlabPPlus.AddCounts(npc, total, solo, vaginal, anal, oral)
+            else
+                AdjustAE(slf, npc, "SexCount", total)
+                AdjustAE(slf, npc, "Masturbation", solo)
+                AdjustAE(slf, npc, "VaginalCount", vaginal)
+                AdjustAE(slf, npc, "AnalCount", anal)
+                AdjustAE(slf, npc, "OralCount", oral)
+            endif
+        endif
+        i += 1
+    endwhile
+EndFunction
+
+bool Function HadAction(int threadID, Actor npc, string actionName) global
+    return TTLL_ThreadsCollector.GetActorBool(threadID, npc, "did." + actionName) || TTLL_ThreadsCollector.GetActorBool(threadID, npc, "got." + actionName)
+EndFunction
+
+Function AdjustAE(SexLabFramework slf, Actor npc, string skill, int amount) global
+    if amount > 0
+        slf.Stats.AdjustSkill(npc, skill, amount)
+    endif
+EndFunction
+
+; ========================================================================================
 ; Framework helpers
 ; ========================================================================================
 
@@ -674,6 +777,28 @@ bool Function HasPenis(SexLabFramework slf, Actor npc, bool pplus) global
     endif
     int gender = slf.GetGender(npc)
     return gender == 0 || gender == 2
+EndFunction
+
+; AE equips a strap-on on female positions; P+ models this through GetSex (futa) instead
+bool Function UsesStrapon(sslThreadController thread, Actor npc, bool pplus) global
+    if pplus
+        return false
+    endif
+    sslActorAlias slot = thread.ActorAlias(npc)
+    return slot && slot.IsUsingStrapon()
+EndFunction
+
+; True when this stage already has an act from giver to receiver
+bool Function IsActGiver(int tid, Actor giver, Actor receiver) global
+    int count = StorageUtil.FormListCount(none, "TTLL_SL_TG_" + tid)
+    int i = 0
+    while i < count
+        if StorageUtil.FormListGet(none, "TTLL_SL_TG_" + tid, i) == giver && StorageUtil.FormListGet(none, "TTLL_SL_TR_" + tid, i) == receiver
+            return true
+        endif
+        i += 1
+    endwhile
+    return false
 EndFunction
 
 bool Function HasVagina(SexLabFramework slf, Actor npc, bool pplus) global

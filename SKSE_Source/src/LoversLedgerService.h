@@ -149,6 +149,8 @@ namespace LL {
 
         NPCData& EnsureNPC(std::uint32_t formID);
         const NPCData* FindNPC(std::uint32_t formID) const;
+        // Caller must hold shared_lock or unique_lock
+        static float ScoreLover(const LoverData& lover);
 
         // v1 → v2 migration helpers
         static bool IsTempFormID(std::uint32_t id) noexcept { return (id >> 24) == 0xFF; }

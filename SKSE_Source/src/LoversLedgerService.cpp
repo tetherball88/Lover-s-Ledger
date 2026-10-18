@@ -975,8 +975,8 @@ namespace LL {
         loverScores.reserve(npc->lovers.size());
 
         for (const auto& [loverID, loverData] : npc->lovers) {
-            // Calculate score for each lover - reuse GetLoverScore logic
-            float score = GetLoverScore(npcFormID, loverID);
+            // _mutex is already held and is not recursive: score without re-locking
+            float score = ScoreLover(loverData);
             loverScores.emplace_back(loverID, score);
         }
 
@@ -1058,8 +1058,10 @@ namespace LL {
             return 0.0f;
         }
 
-        const auto& lover = loverIt->second;
+        return ScoreLover(loverIt->second);
+    }
 
+    float LoversLedgerService::ScoreLover(const LoverData& lover) {
         // Extract lover data
         float orgasms = lover.orgasms;
         int exclSex = lover.exclusiveSex;
@@ -1127,7 +1129,7 @@ namespace LL {
             auto* form = RE::TESForm::LookupByID(baseFormID);
             if (!form) return false;
             auto* npc = form->As<RE::TESNPC>();
-            return npc && npc->IsUnique();
+            return npc && LL::IsEffectivelyUnique(npc);
         };
 
         // Pass 1: remove invalid NPC entries from _store

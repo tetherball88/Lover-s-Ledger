@@ -29,6 +29,15 @@ Function Maintenance()
             slRestarting = new bool[15]
             slSawEnd = new bool[15]
             slEndAt = new float[15]
+        else
+            ; Saved mid-restart: the lists are cleared on load and the real-time clock restarts at 0
+            int i = 0
+            while i < 15
+                slRestarting[i] = false
+                slSawEnd[i] = false
+                slEndAt[i] = 0.0
+                i += 1
+            endwhile
         endif
         TTLL_SexlabIntegration.Maintenance(self, slf)
     endif
@@ -57,6 +66,9 @@ EndFunction
 
 Function OStimEnd(string EventName, string StrArg, float ThreadID, Form Sender)
     TTLL_OstimINtegration.OStimEnd(ThreadID as int)
+    if slf != none
+        TTLL_SexlabIntegration.AddOStimStats(slf, ThreadID as int)
+    endif
 
     ArmUpdate(3)
 EndFunction

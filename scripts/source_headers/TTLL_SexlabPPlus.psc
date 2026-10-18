@@ -24,3 +24,6 @@ EndFunction
 int Function GetSex(Actor akActor) global
     return 0
 EndFunction
+
+Function AddCounts(Actor akActor, int total, int solo, int vaginal, int anal, int oral) global
+EndFunction

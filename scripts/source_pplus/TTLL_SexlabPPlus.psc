@@ -44,3 +44,18 @@ EndFunction
 int Function GetSex(Actor akActor) global
     return SexLabRegistry.GetSex(akActor, false)
 EndFunction
+
+; Adds to the sex counters (SexLabStatistics ids: 15 total, 12 masturbated, 10 vaginal, 11 anal, 9 oral)
+Function AddCounts(Actor akActor, int total, int solo, int vaginal, int anal, int oral) global
+    AddStatistic(akActor, 15, total)
+    AddStatistic(akActor, 12, solo)
+    AddStatistic(akActor, 10, vaginal)
+    AddStatistic(akActor, 11, anal)
+    AddStatistic(akActor, 9, oral)
+EndFunction
+
+Function AddStatistic(Actor akActor, int id, int amount) global
+    if amount > 0
+        SexLabStatistics.SetStatistic(akActor, id, SexLabStatistics.GetStatistic(akActor, id) + amount)
+    endif
+EndFunction

@@ -100,7 +100,7 @@ Notes on property paths: several functions accept dot-separated property paths (
   - SKSE (matching game version)
   - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
-  - SexLab AE or SexLab P+ (optional — records SexLab scenes into the same ledger fields as OStim)
+  - SexLab AE or SexLab P+ (optional — records SexLab scenes into the same ledger fields as OStim). SexLab keeps counting its own scenes; each OStim scene adds 1 to SexLab's sex counters (total or masturbation, vaginal, anal, oral) for each participant, so SexLab's stats include OStim encounters. Counting SkyrimNet_SexLab OrgasmEngine orgasms needs a SkyrimNet_SexLab build that has `IsEngineDisabled`
   - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v0.25.0+ (optional) — enables NPC bio decorators for AI-driven dialogue
 
 ## Installation
