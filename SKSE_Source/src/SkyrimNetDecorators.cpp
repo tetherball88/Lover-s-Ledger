@@ -130,8 +130,9 @@ namespace {
         // Retrieve all lover FormIDs sorted by score (highest first)
         std::vector<std::uint32_t> loverIDs = service.GetAllLovers(baseID, -1);
         int othersCount = service.GetNpcInt(baseID, "otherscount");
+        std::vector<LL::PastLover> pastLovers = service.GetPastLovers(baseID);
 
-        if (loverIDs.empty() && othersCount == 0) return "";
+        if (loverIDs.empty() && othersCount == 0 && pastLovers.empty()) return "";
 
         // Get current game time for recency computation
         float currentTime = 0.0f;
@@ -170,6 +171,19 @@ namespace {
                 << total << " encounter" << (total != 1 ? "s" : "")
                 << " (" << exclusiveSex << " private, " << groupSex << " group)"
                 << ", last " << recency << "\n";
+        }
+
+        // Backfilled SexLab history with no known partner
+        for (const auto& past : pastLovers) {
+            auto* race = RE::TESForm::LookupByID<RE::TESRace>(past.raceFormID);
+            const char* raceName = (race && race->GetName() && *race->GetName()) ? race->GetName() : "unknown";
+            if (!headerWritten) {
+                out << "### Sexual Partners\n";
+                headerWritten = true;
+            }
+            out << "- **An unnamed " << raceName << (past.gender == 1 ? " woman" : " man")
+                << " from the past**: " << past.encounters << " encounter" << (past.encounters != 1 ? "s" : "")
+                << ", long ago\n";
         }
 
         int insignificantTotal = othersCount + weakCount;

@@ -3,6 +3,7 @@
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "PCH.h"
@@ -15,6 +16,25 @@ namespace LL {
     // Global scene counters live in their own record so older DLLs skip them cleanly
     constexpr std::uint32_t kSceneCountsVersion = 1;
     constexpr std::uint32_t kSceneCountsType = 'LLSC';  // LoversLedger Scene Counts
+    // SexLab history backfill (checked NPCs, past lovers) in its own record, same reason
+    constexpr std::uint32_t kSexLabHistoryVersion = 1;
+    constexpr std::uint32_t kSexLabHistoryType = 'LLPL';  // LoversLedger Past Lovers
+
+    // Counts SexLab holds that the ledger does not, copied once per NPC
+    struct SexLabHistory {
+        int encounters{0};
+        int solo{0};
+        int vaginal{0};
+        int anal{0};
+        int oral{0};
+    };
+
+    // Stand-in partner for backfilled history with no known partner; never a real form
+    struct PastLover {
+        std::uint32_t raceFormID{0};
+        std::int8_t gender{0};  // 0 = male, 1 = female
+        int encounters{0};
+    };
 
     // Directions for ActKey::dir
     constexpr std::uint8_t kActDirAny = 0;
@@ -184,6 +204,15 @@ namespace LL {
         // playthrough (flag persisted in the SKSE save). Thread-safe.
         void ScanAllGameRelationships();
 
+        // SexLab backfill: true the first time an NPC is claimed (and marks it), false after
+        bool ClaimSexLabCheck(std::uint32_t npcFormID);
+        // Adds the history to the NPC's game relationship partner (spouse > lover > courting).
+        // Returns false and changes nothing when the NPC has no such partner.
+        bool AddHistoryToPartner(std::uint32_t npcFormID, const SexLabHistory& history);
+        // Adds the history to the NPC's past lover of that race and gender
+        void AddPastLover(std::uint32_t npcFormID, std::uint32_t raceFormID, int gender, const SexLabHistory& history);
+        std::vector<PastLover> GetPastLovers(std::uint32_t npcFormID) const;
+
     private:
         LoversLedgerService() = default;
         ~LoversLedgerService() = default;
@@ -198,6 +227,12 @@ namespace LL {
         // Scene counter record; SaveSceneCounts expects the caller to hold the lock
         void SaveSceneCounts(SKSE::SerializationInterface* a_intfc) const;
         void LoadSceneCounts(SKSE::SerializationInterface* a_intfc, std::uint32_t version);
+
+        // SexLab history record; SaveSexLabHistory expects the caller to hold the lock
+        void SaveSexLabHistory(SKSE::SerializationInterface* a_intfc) const;
+        void LoadSexLabHistory(SKSE::SerializationInterface* a_intfc, std::uint32_t version);
+        // Caller must hold unique_lock. NPC totals and did/got actions for the history.
+        void AddHistoryToNPC(NPCData& npc, bool npcMale, bool partnerMale, const SexLabHistory& history);
 
         // v1 → v2 migration helpers
         static bool IsTempFormID(std::uint32_t id) noexcept { return (id >> 24) == 0xFF; }
@@ -222,6 +257,10 @@ namespace LL {
         // Global scene counters; saved in the kSceneCountsType record
         std::unordered_map<ActKey, int, ActKeyHash> _actCounts;
         std::unordered_map<int, int> _actorCountScenes;  // key 0 = all scenes
+
+        // SexLab backfill state; saved in the kSexLabHistoryType record
+        std::unordered_set<std::uint32_t> _sexlabChecked;
+        std::unordered_map<std::uint32_t, std::vector<PastLover>> _pastLovers;
 
         // Action-name synonyms: member -> cluster word; loaded once at data load
         std::unordered_map<std::string, std::string> _canonical;

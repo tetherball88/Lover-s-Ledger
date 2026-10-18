@@ -59,3 +59,8 @@ Function AddStatistic(Actor akActor, int id, int amount) global
         SexLabStatistics.SetStatistic(akActor, id, SexLabStatistics.GetStatistic(akActor, id) + amount)
     endif
 EndFunction
+
+; A sex counter (same SexLabStatistics ids as AddCounts)
+int Function GetCount(Actor akActor, int id) global
+    return SexLabStatistics.GetStatistic(akActor, id) as int
+EndFunction

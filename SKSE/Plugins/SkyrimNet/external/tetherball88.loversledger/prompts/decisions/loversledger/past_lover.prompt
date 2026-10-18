@@ -1,0 +1,36 @@
+{# Decision template: the race and gender of a past lover nobody remembers by name. Two choice questions.
+   Sent by TTLL_SexlabIntegration.SendPastLover the first time Lover's Ledger sees an actor whose SexLab
+   statistics hold more encounters than the ledger and who has no spouse, lover or courting partner.
+   The answer becomes a stand-in partner for those encounters (TTLL_MainController.OnPastLoverDecision).
+   Option keys must match TTLL_SexlabIntegration.RaceFromKey. Context: npc_uuid. #}
+{% set _npc = decnpc(npc_uuid) %}
+[ state npc ]
+{{ _npc.name }}, {{ _npc.gender }} {{ _npc.race }}.
+{{ render_character_profile("short_inline", npc_uuid) }}
+[ end state ]
+
+[ question race choice ]
+{{ _npc.name }} has had lovers in the past whose names are not recorded. Pick the race of the most likely one.
+Weigh where {{ _npc.name }} lives and has lived, their own race, and the people they keep company with (`npc`).
+[ criteria ]
+nord: a Nord
+imperial: an Imperial
+breton: a Breton
+redguard: a Redguard
+altmer: an Altmer (High Elf)
+bosmer: a Bosmer (Wood Elf)
+dunmer: a Dunmer (Dark Elf)
+orc: an Orc
+khajiit: a Khajiit
+argonian: an Argonian
+[ end criteria ]
+[ end question ]
+
+[ question gender choice ]
+Pick the gender of that past lover, from what `npc` says about who {{ _npc.name }} is drawn to.
+If nothing says otherwise, lean toward the opposite gender of {{ _npc.name }}.
+[ criteria ]
+male: a man
+female: a woman
+[ end criteria ]
+[ end question ]

@@ -128,3 +128,19 @@ Form[] Function GetAllLovers(Actor npc, Int topK = -1) Global Native
 ; Example: GetLoverScore(npc, lover) returns the calculated score for that lover
 Float Function GetLoverScore(Actor npc, Actor lover) Global Native
 
+
+; ========================================================================================
+; SexLab History Backfill
+; ========================================================================================
+
+; True the first time it is called for a unique NPC (and claims it); false after and for non-unique NPCs
+Bool Function ClaimSexLabCheck(Actor npc) Global Native
+
+; Adds SexLab history the ledger lacks to the NPC's game relationship partner (spouse > lover > courting):
+; encounters to the NPC and partner, solo and vaginal/anal/oral acts to the NPC.
+; Returns false and changes nothing when the NPC has no such partner.
+Bool Function AddHistoryToPartner(Actor npc, Int encounters, Int solo, Int vaginal, Int anal, Int oral) Global Native
+
+; Same, with a stand-in past lover of akRace and gender (0 male, 1 female) as the partner.
+; Past lovers are not actors: GetAllLovers does not return them; the ttll_get_npc_lovers decorator lists them.
+Function AddPastLover(Actor npc, Race akRace, Int gender, Int encounters, Int solo, Int vaginal, Int anal, Int oral) Global Native

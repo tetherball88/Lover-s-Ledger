@@ -27,3 +27,7 @@ EndFunction
 
 Function AddCounts(Actor akActor, int total, int solo, int vaginal, int anal, int oral) global
 EndFunction
+
+int Function GetCount(Actor akActor, int id) global
+    return 0
+EndFunction

@@ -232,6 +232,31 @@ namespace LL_Papyrus {
         return result;
     }
 
+    // SexLab backfill: true once per unique NPC (the first call claims it)
+    bool ClaimSexLabCheck(RE::StaticFunctionTag*, RE::Actor* npc) {
+        auto id = UniqueBaseID(npc);
+        return id && LL::LoversLedgerService::GetSingleton().ClaimSexLabCheck(*id);
+    }
+
+    // Copies SexLab history onto the NPC's game relationship partner; false if it has none
+    bool AddHistoryToPartner(RE::StaticFunctionTag*, RE::Actor* npc, std::int32_t encounters, std::int32_t solo,
+                             std::int32_t vaginal, std::int32_t anal, std::int32_t oral) {
+        auto id = UniqueBaseID(npc);
+        if (!id) return false;
+        return LL::LoversLedgerService::GetSingleton().AddHistoryToPartner(
+            *id, LL::SexLabHistory{encounters, solo, vaginal, anal, oral});
+    }
+
+    // Copies SexLab history onto a stand-in past lover of that race and gender (0 male, 1 female)
+    void AddPastLover(RE::StaticFunctionTag*, RE::Actor* npc, RE::TESRace* race, std::int32_t gender,
+                      std::int32_t encounters, std::int32_t solo, std::int32_t vaginal, std::int32_t anal,
+                      std::int32_t oral) {
+        auto id = UniqueBaseID(npc);
+        if (!id || !race) { SKSE::log::warn("AddPastLover: non-unique NPC or null race"); return; }
+        LL::LoversLedgerService::GetSingleton().AddPastLover(*id, race->GetFormID(), gender,
+                                                             LL::SexLabHistory{encounters, solo, vaginal, anal, oral});
+    }
+
     // Register function called by SKSE Papyrus interface
     bool RegisterLoversLedgerPapyrus(RE::BSScript::IVirtualMachine* a_vm) {
         // Generic getters with dot-separated property paths
@@ -259,6 +284,10 @@ namespace LL_Papyrus {
         a_vm->RegisterFunction("GetAllLovers", "TTLL_Store", GetAllLovers);
 
         a_vm->RegisterFunction("GetLoverScore", "TTLL_Store", GetLoverScore);
+
+        a_vm->RegisterFunction("ClaimSexLabCheck", "TTLL_Store", ClaimSexLabCheck);
+        a_vm->RegisterFunction("AddHistoryToPartner", "TTLL_Store", AddHistoryToPartner);
+        a_vm->RegisterFunction("AddPastLover", "TTLL_Store", AddPastLover);
 
         return true;
     }

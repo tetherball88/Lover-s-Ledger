@@ -40,6 +40,7 @@ Function Maintenance()
             endwhile
         endif
         TTLL_SexlabIntegration.Maintenance(self, slf)
+        TTLL_SexlabIntegration.ResumePastLovers(self)
     endif
 
     StorageUtil.ClearAllPrefix("TTLNLDec_")
@@ -54,6 +55,9 @@ EndFunction
 
 Function OStimStart(string EventName, string StrArg, float ThreadID, Form Sender)
     TTLL_OstimINtegration.OStimStart(ThreadID as int)
+    if slf != none
+        TTLL_SexlabIntegration.CheckThreadHistory(self, slf, OThread.GetActors(ThreadID as int))
+    endif
 EndFunction
 
 Function OStimSceneChanged(string EventName, string StrArg, float ThreadID, Form Sender)
@@ -96,6 +100,10 @@ Event SLAnimationStart(int tid, bool hasPlayer)
         TTLL_SexlabIntegration.ProcessStage(slf, tid)
         slRestarting[tid] = false
         slSawEnd[tid] = false
+        sslThreadController thread = slf.GetController(tid)
+        if thread
+            TTLL_SexlabIntegration.CheckThreadHistory(self, slf, thread.Positions)
+        endif
     endif
 EndEvent
 
@@ -165,6 +173,17 @@ Event SLNetOrgasm(string eventName, string strArg, float numArg, Form sender)
     endif
     TTLL_SexlabIntegration.OnOrgasm(slf, npc)
 EndEvent
+
+; SkyrimNet decision callback for TTLL_SexlabIntegration.SendPastLover: answer is the race key
+Function OnPastLoverDecision(String answer, String resultJson, int success)
+    string gender = ""
+    if success == 1
+        gender = SkyrimNetApi.GetJsonString(resultJson, "gender", "")
+    else
+        answer = ""
+    endif
+    TTLL_SexlabIntegration.FinishPastLover(self, answer, gender)
+EndFunction
 
 ; Seconds to wait for a P+ ChangeActors restart before applying the ended thread
 float Function SexLabRestartFallback()

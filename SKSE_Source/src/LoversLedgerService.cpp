@@ -1176,6 +1176,8 @@ namespace LL {
         _globalRelationsScanDone = false;
         _actCounts.clear();
         _actorCountScenes.clear();
+        _sexlabChecked.clear();
+        _pastLovers.clear();
         SKSE::log::info("LoversLedgerService: All data cleared");
     }
 
@@ -1213,6 +1215,7 @@ namespace LL {
         }
         for (auto npcFormID : npcsToRemove) {
             _store.erase(npcFormID);
+            _pastLovers.erase(npcFormID);
             ++npcsRemoved;
             SKSE::log::debug("  Removed invalid NPC base FormID 0x{:X}", npcFormID);
         }
@@ -1528,6 +1531,7 @@ namespace LL {
         }
 
         SaveSceneCounts(a_intfc);
+        SaveSexLabHistory(a_intfc);
 
         SKSE::log::info("LoversLedgerService: Save complete");
     }
@@ -1542,6 +1546,10 @@ namespace LL {
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
             if (type == kSceneCountsType) {
                 LoadSceneCounts(a_intfc, version);
+                continue;
+            }
+            if (type == kSexLabHistoryType) {
+                LoadSexLabHistory(a_intfc, version);
                 continue;
             }
             if (type != kSerializationType) {
@@ -1700,6 +1708,199 @@ namespace LL {
                         _actorCountScenes.size());
     }
 
+    // ========================================================================================
+    // SexLab history backfill
+    // ========================================================================================
+
+    bool LoversLedgerService::ClaimSexLabCheck(std::uint32_t npcFormID) {
+        if (npcFormID == 0) return false;
+        std::unique_lock lock(_mutex);
+        return _sexlabChecked.insert(npcFormID).second;
+    }
+
+    void LoversLedgerService::AddHistoryToNPC(NPCData& npc, bool npcMale, bool partnerMale,
+                                              const SexLabHistory& history) {
+        npc.exclusiveSex += history.encounters;
+        npc.soloSex += history.solo;
+
+        // SexLab counts acts per scene without a side; the male side penetrates
+        auto addAct = [&](const char* action, bool isDid, int count) {
+            if (count > 0) {
+                SelectActionMap<std::unordered_map<std::string, int>>(npc, isDid)[Canonical(action)] += count;
+            }
+        };
+        addAct("vaginalsex", npcMale, history.vaginal);
+        addAct("analsex", npcMale, history.anal);
+        if (npcMale) {
+            addAct("blowjob", false, history.oral);
+        } else if (partnerMale) {
+            addAct("blowjob", true, history.oral);
+        } else {
+            addAct("cunnilingus", false, history.oral);
+        }
+    }
+
+    bool LoversLedgerService::AddHistoryToPartner(std::uint32_t npcFormID, const SexLabHistory& history) {
+        auto* npcBase = RE::TESForm::LookupByID<RE::TESNPC>(npcFormID);
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!npcBase || !dataHandler) return false;
+
+        // Same relationship classes as ScanAllGameRelationships; spouse wins over lover over courting
+        constexpr std::uint32_t kAssocSpouse   = 0x000142CA;
+        constexpr std::uint32_t kAssocCourting = 0x0001EE23;
+        RE::TESNPC* partner = nullptr;
+        int partnerRank = 0;
+        for (auto* relForm : dataHandler->GetFormArray<RE::BGSRelationship>()) {
+            if (!relForm || !relForm->npc1 || !relForm->npc2) continue;
+            RE::TESNPC* other = relForm->npc1 == npcBase   ? relForm->npc2
+                                : relForm->npc2 == npcBase ? relForm->npc1
+                                                           : nullptr;
+            if (!other || other == npcBase || !IsEffectivelyUnique(other)) continue;
+
+            const std::uint32_t assocID = relForm->assocType ? relForm->assocType->GetFormID() : 0;
+            int rank = 0;
+            if (assocID == kAssocSpouse) {
+                rank = 3;
+            } else if (assocID == kAssocCourting) {
+                rank = 1;
+            } else if (relForm->level == RE::BGSRelationship::RELATIONSHIP_LEVEL::kLover) {
+                rank = 2;
+            }
+            if (rank > partnerRank) {
+                partner = other;
+                partnerRank = rank;
+            }
+        }
+        if (!partner) return false;
+
+        const std::uint32_t partnerID = partner->GetFormID();
+        std::unique_lock lock(_mutex);
+        auto& npc = EnsureNPC(npcFormID);
+        npc.lovers[partnerID].exclusiveSex += history.encounters;
+        AddHistoryToNPC(npc, npcBase->GetSex() == RE::SEXES::kMale, partner->GetSex() == RE::SEXES::kMale, history);
+        SKSE::log::info("AddHistoryToPartner: NPC 0x{:X} partner 0x{:X} (rank {}) +{} encounters, +{} solo, "
+                        "+{} vaginal, +{} anal, +{} oral",
+                        npcFormID, partnerID, partnerRank, history.encounters, history.solo, history.vaginal,
+                        history.anal, history.oral);
+        return true;
+    }
+
+    void LoversLedgerService::AddPastLover(std::uint32_t npcFormID, std::uint32_t raceFormID, int gender,
+                                           const SexLabHistory& history) {
+        auto* npcBase = RE::TESForm::LookupByID<RE::TESNPC>(npcFormID);
+        if (!npcBase) return;
+        const auto sex = static_cast<std::int8_t>(gender == 1 ? 1 : 0);
+
+        std::unique_lock lock(_mutex);
+        if (history.encounters > 0) {
+            auto& pastLovers = _pastLovers[npcFormID];
+            auto it = std::find_if(pastLovers.begin(), pastLovers.end(), [&](const PastLover& p) {
+                return p.raceFormID == raceFormID && p.gender == sex;
+            });
+            if (it == pastLovers.end()) {
+                pastLovers.push_back(PastLover{raceFormID, sex, 0});
+                it = std::prev(pastLovers.end());
+            }
+            it->encounters += history.encounters;
+        }
+        AddHistoryToNPC(EnsureNPC(npcFormID), npcBase->GetSex() == RE::SEXES::kMale, sex == 0, history);
+        SKSE::log::info("AddPastLover: NPC 0x{:X} past lover race 0x{:X} gender {} +{} encounters, +{} solo, "
+                        "+{} vaginal, +{} anal, +{} oral",
+                        npcFormID, raceFormID, sex, history.encounters, history.solo, history.vaginal, history.anal,
+                        history.oral);
+    }
+
+    std::vector<PastLover> LoversLedgerService::GetPastLovers(std::uint32_t npcFormID) const {
+        std::shared_lock lock(_mutex);
+        auto it = _pastLovers.find(npcFormID);
+        return (it != _pastLovers.end()) ? it->second : std::vector<PastLover>{};
+    }
+
+    void LoversLedgerService::SaveSexLabHistory(SKSE::SerializationInterface* a_intfc) const {
+        if (!a_intfc->OpenRecord(kSexLabHistoryType, kSexLabHistoryVersion)) {
+            SKSE::log::error("Failed to open SexLab history record");
+            return;
+        }
+
+        std::uint32_t count = static_cast<std::uint32_t>(_sexlabChecked.size());
+        if (!WriteData(a_intfc, count, "SexLabHistory.checked count")) return;
+        for (auto npcFormID : _sexlabChecked) {
+            if (!WriteData(a_intfc, npcFormID, "SexLabHistory.checked")) return;
+        }
+
+        count = static_cast<std::uint32_t>(_pastLovers.size());
+        if (!WriteData(a_intfc, count, "SexLabHistory.npc count")) return;
+        for (const auto& [npcFormID, pastLovers] : _pastLovers) {
+            std::uint32_t loverCount = static_cast<std::uint32_t>(pastLovers.size());
+            if (!WriteData(a_intfc, npcFormID, "PastLover.npc") || !WriteData(a_intfc, loverCount, "PastLover.count")) {
+                return;
+            }
+            for (const auto& p : pastLovers) {
+                if (!WriteData(a_intfc, p.raceFormID, "PastLover.race") ||
+                    !WriteData(a_intfc, p.gender, "PastLover.gender") ||
+                    !WriteData(a_intfc, p.encounters, "PastLover.encounters")) {
+                    return;
+                }
+            }
+        }
+        SKSE::log::info("Saved SexLab history: {} checked NPCs, {} NPCs with past lovers", _sexlabChecked.size(),
+                        _pastLovers.size());
+    }
+
+    void LoversLedgerService::LoadSexLabHistory(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        if (version != kSexLabHistoryVersion) {
+            SKSE::log::error("Unsupported SexLab history version: {}", version);
+            return;
+        }
+
+        std::unordered_set<std::uint32_t> checked;
+        std::unordered_map<std::uint32_t, std::vector<PastLover>> pastLovers;
+
+        std::uint32_t count = 0;
+        if (!ReadData(a_intfc, count, "SexLabHistory.checked count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t npcFormID = 0;
+            if (!ReadData(a_intfc, npcFormID, "SexLabHistory.checked")) return;
+            std::uint32_t resolved = 0;
+            if (a_intfc->ResolveFormID(npcFormID, resolved)) {
+                checked.insert(resolved);
+            }
+        }
+
+        if (!ReadData(a_intfc, count, "SexLabHistory.npc count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t npcFormID = 0;
+            std::uint32_t loverCount = 0;
+            if (!ReadData(a_intfc, npcFormID, "PastLover.npc") || !ReadData(a_intfc, loverCount, "PastLover.count")) {
+                return;
+            }
+            std::uint32_t resolvedNPC = 0;
+            const bool npcResolved = a_intfc->ResolveFormID(npcFormID, resolvedNPC);
+            for (std::uint32_t j = 0; j < loverCount; ++j) {
+                PastLover p;
+                if (!ReadData(a_intfc, p.raceFormID, "PastLover.race") ||
+                    !ReadData(a_intfc, p.gender, "PastLover.gender") ||
+                    !ReadData(a_intfc, p.encounters, "PastLover.encounters")) {
+                    return;
+                }
+                std::uint32_t resolvedRace = 0;
+                if (!npcResolved || !a_intfc->ResolveFormID(p.raceFormID, resolvedRace)) {
+                    SKSE::log::warn("LoadSexLabHistory: dropping past lover of NPC 0x{:X} (race 0x{:X} unresolved)",
+                                    npcFormID, p.raceFormID);
+                    continue;
+                }
+                p.raceFormID = resolvedRace;
+                pastLovers[resolvedNPC].push_back(p);
+            }
+        }
+
+        std::unique_lock lock(_mutex);
+        _sexlabChecked = std::move(checked);
+        _pastLovers = std::move(pastLovers);
+        SKSE::log::info("Loaded SexLab history: {} checked NPCs, {} NPCs with past lovers", _sexlabChecked.size(),
+                        _pastLovers.size());
+    }
+
     void LoversLedgerService::RevertCallback([[maybe_unused]] SKSE::SerializationInterface* a_intfc) {
         SKSE::log::info("LoversLedgerService: Reverting data (new game)...");
         ClearAll();
@@ -1729,6 +1930,8 @@ namespace LL {
         if (it != _store.end()) {
             SKSE::log::info("DeleteNPCData: Deleting NPC 0x{:X}", npcFormID);
             _store.erase(it);
+            _sexlabChecked.erase(npcFormID);
+            _pastLovers.erase(npcFormID);
         } else {
             SKSE::log::warn("DeleteNPCData: NPC 0x{:X} not found", npcFormID);
         }

@@ -745,6 +745,168 @@ Function AdjustAE(SexLabFramework slf, Actor npc, string skill, int amount) glob
 EndFunction
 
 ; ========================================================================================
+; SexLab history backfill: the first time the ledger sees an actor in a scene, SexLab counts the ledger
+; lacks go to the actor's game relationship partner (seeded by the native relationship scan), else to a
+; past lover whose race and gender the SkyrimNet decision model picks (TTLL_MainController.OnPastLoverDecision).
+; Pending past lovers (on None, one decision in flight): TTLL_PL_A actors, TTLL_PL_C 5 counts per actor,
+; TTLL_PL_Busy 1 while a decision is out.
+; ========================================================================================
+
+Function CheckThreadHistory(TTLL_MainController mainController, SexLabFramework slf, Actor[] actors) global
+    int i = 0
+    while i < actors.Length
+        CheckHistory(mainController, slf, actors[i])
+        i += 1
+    endwhile
+EndFunction
+
+Function CheckHistory(TTLL_MainController mainController, SexLabFramework slf, Actor npc) global
+    ; Called before the scene is counted, so both sides hold the history before this scene
+    if !npc || !TTLL_Store.ClaimSexLabCheck(npc)
+        return
+    endif
+    int total
+    int solo
+    int vaginal
+    int anal
+    int oral
+    if IsPPlus()
+        total = TTLL_SexlabPPlus.GetCount(npc, 15)
+        solo = TTLL_SexlabPPlus.GetCount(npc, 12)
+        vaginal = TTLL_SexlabPPlus.GetCount(npc, 10)
+        anal = TTLL_SexlabPPlus.GetCount(npc, 11)
+        oral = TTLL_SexlabPPlus.GetCount(npc, 9)
+    else
+        total = slf.Stats.GetSkill(npc, "SexCount")
+        solo = slf.Stats.GetSkill(npc, "Masturbation")
+        vaginal = slf.Stats.GetSkill(npc, "VaginalCount")
+        anal = slf.Stats.GetSkill(npc, "AnalCount")
+        oral = slf.Stats.GetSkill(npc, "OralCount")
+    endif
+    total = Missing(total, TTLL_Store.GetNpcInt(npc, "exclusiveSex") + TTLL_Store.GetNpcInt(npc, "groupSex"))
+    solo = Missing(solo, TTLL_Store.GetNpcInt(npc, "soloSex"))
+    vaginal = Missing(vaginal, ActionCount(npc, "vaginalsex"))
+    anal = Missing(anal, ActionCount(npc, "analsex"))
+    ; deepthroat is stored as blowjob (synonyms.json)
+    oral = Missing(oral, ActionCount(npc, "blowjob") + ActionCount(npc, "cunnilingus") + ActionCount(npc, "anilingus") \
+        + ActionCount(npc, "rimjob") + ActionCount(npc, "lickingpenis") + ActionCount(npc, "lickingvagina") \
+        + ActionCount(npc, "lickingtesticles"))
+    if total + solo + vaginal + anal + oral == 0
+        return
+    endif
+    if TTLL_Store.AddHistoryToPartner(npc, total, solo, vaginal, anal, oral)
+        return
+    endif
+    StorageUtil.FormListAdd(none, "TTLL_PL_A", npc)
+    StorageUtil.IntListAdd(none, "TTLL_PL_C", total)
+    StorageUtil.IntListAdd(none, "TTLL_PL_C", solo)
+    StorageUtil.IntListAdd(none, "TTLL_PL_C", vaginal)
+    StorageUtil.IntListAdd(none, "TTLL_PL_C", anal)
+    StorageUtil.IntListAdd(none, "TTLL_PL_C", oral)
+    SendPastLover(mainController)
+EndFunction
+
+int Function Missing(int sexlab, int ledger) global
+    if sexlab > ledger
+        return sexlab - ledger
+    endif
+    return 0
+EndFunction
+
+int Function ActionCount(Actor npc, string actionName) global
+    return TTLL_Store.GetActionCount(npc, true, actionName) + TTLL_Store.GetActionCount(npc, false, actionName)
+EndFunction
+
+; Asks the decision model for the first pending past lover; without SkyrimNet, files it with the fallbacks
+Function SendPastLover(TTLL_MainController mainController) global
+    if StorageUtil.GetIntValue(none, "TTLL_PL_Busy") == 1 || StorageUtil.FormListCount(none, "TTLL_PL_A") == 0
+        return
+    endif
+    Actor npc = StorageUtil.FormListGet(none, "TTLL_PL_A", 0) as Actor
+    if npc && Game.GetModByName("SkyrimNet.esp") != 255
+        string context = "{\"npc_uuid\":\"" + SkyrimNetApi.GetEntityUUID(npc) + "\"}"
+        if SkyrimNetApi.SendCustomDecisionToLLM("loversledger/past_lover", context, mainController, \
+                "TTLL_MainController", "OnPastLoverDecision") == 1
+            StorageUtil.SetIntValue(none, "TTLL_PL_Busy", 1)
+            return
+        endif
+    endif
+    FinishPastLover(mainController, "", "")
+EndFunction
+
+; Files the first pending past lover. raceKey / genderKey "" = fallback (own race, opposite gender).
+Function FinishPastLover(TTLL_MainController mainController, string raceKey, string genderKey) global
+    if StorageUtil.FormListCount(none, "TTLL_PL_A") == 0
+        StorageUtil.UnsetIntValue(none, "TTLL_PL_Busy")
+        return
+    endif
+    Actor npc = StorageUtil.FormListGet(none, "TTLL_PL_A", 0) as Actor
+    int total = StorageUtil.IntListGet(none, "TTLL_PL_C", 0)
+    int solo = StorageUtil.IntListGet(none, "TTLL_PL_C", 1)
+    int vaginal = StorageUtil.IntListGet(none, "TTLL_PL_C", 2)
+    int anal = StorageUtil.IntListGet(none, "TTLL_PL_C", 3)
+    int oral = StorageUtil.IntListGet(none, "TTLL_PL_C", 4)
+    StorageUtil.FormListRemoveAt(none, "TTLL_PL_A", 0)
+    int i = 0
+    while i < 5
+        StorageUtil.IntListRemoveAt(none, "TTLL_PL_C", 0)
+        i += 1
+    endwhile
+    StorageUtil.UnsetIntValue(none, "TTLL_PL_Busy")
+
+    if npc
+        Race pastRace = RaceFromKey(raceKey)
+        if !pastRace
+            pastRace = npc.GetRace()
+        endif
+        int gender = 1 - npc.GetActorBase().GetSex()
+        if genderKey == "male"
+            gender = 0
+        elseif genderKey == "female"
+            gender = 1
+        endif
+        TTLL_Store.AddPastLover(npc, pastRace, gender, total, solo, vaginal, anal, oral)
+    endif
+    SendPastLover(mainController)
+EndFunction
+
+; Option keys of prompts/decisions/loversledger/past_lover.prompt; vanilla playable races (Skyrim.esm)
+Race Function RaceFromKey(string raceKey) global
+    int formId = 0
+    if raceKey == "nord"
+        formId = 0x13746
+    elseif raceKey == "imperial"
+        formId = 0x13744
+    elseif raceKey == "breton"
+        formId = 0x13741
+    elseif raceKey == "redguard"
+        formId = 0x13748
+    elseif raceKey == "altmer"
+        formId = 0x13743
+    elseif raceKey == "bosmer"
+        formId = 0x13749
+    elseif raceKey == "dunmer"
+        formId = 0x13742
+    elseif raceKey == "orc"
+        formId = 0x13747
+    elseif raceKey == "khajiit"
+        formId = 0x13745
+    elseif raceKey == "argonian"
+        formId = 0x13740
+    endif
+    if formId == 0
+        return none
+    endif
+    return Game.GetFormFromFile(formId, "Skyrim.esm") as Race
+EndFunction
+
+; On load: a decision sent before the save never answers, so resend the first pending one
+Function ResumePastLovers(TTLL_MainController mainController) global
+    StorageUtil.UnsetIntValue(none, "TTLL_PL_Busy")
+    SendPastLover(mainController)
+EndFunction
+
+; ========================================================================================
 ; Framework helpers
 ; ========================================================================================
 
