@@ -378,11 +378,14 @@ namespace LL {
 
     // Actor-level getters
     int ThreadsCollector::GetActorInt(std::int32_t threadID, std::uint32_t actorFormID,
-                                      [[maybe_unused]] std::string_view propName) const {
+                                      std::string_view propName) const {
         const auto* actor = FindActor(threadID, actorFormID);
         if (!actor) return 0;
 
-        // No int properties at actor level currently
+        auto parts = ParsePropertyPath(propName);
+        if (parts.size() == 1 && parts[0] == "anatomy") {
+            return actor->anatomy;
+        }
         return 0;
     }
 
@@ -424,12 +427,16 @@ namespace LL {
     }
 
     // Actor-level setters
-    void ThreadsCollector::SetActorInt(std::int32_t threadID, std::uint32_t actorFormID,
-                                       [[maybe_unused]] std::string_view propName, [[maybe_unused]] int value) {
-        [[maybe_unused]] std::unique_lock lock(_mutex);
-        [[maybe_unused]] auto& actor = _threads[threadID].actors[actorFormID];
+    void ThreadsCollector::SetActorInt(std::int32_t threadID, std::uint32_t actorFormID, std::string_view propName,
+                                       int value) {
+        std::unique_lock lock(_mutex);
+        auto& actor = _threads[threadID].actors[actorFormID];
 
-        // No int properties at actor level currently
+        // Any other name only creates the actor (feeders use "participant")
+        auto parts = ParsePropertyPath(propName);
+        if (parts.size() == 1 && parts[0] == "anatomy") {
+            actor.anatomy = value;
+        }
     }
 
     void ThreadsCollector::SetActorFlt(std::int32_t threadID, std::uint32_t actorFormID,
@@ -629,6 +636,19 @@ namespace LL {
         const std::string_view encounterType = GetEncounterTypeFromCount(actorCount);
 
         auto& ledger = LL::LoversLedgerService::GetSingleton();
+
+        // First-time partner traits, before this scene changes the totals their one-time seed reads
+        if (actorCount >= 2) {
+            for (const auto& [actorFormID, _] : thread->actors) {
+                auto [baseFormID, isUnique] = ResolveUniqueBaseID(actorFormID);
+                if (!isUnique) continue;
+                std::vector<LL::PartnerRef> partners;
+                for (const auto& [otherFormID, other] : thread->actors) {
+                    if (otherFormID != actorFormID) partners.push_back(LL::PartnerRef{otherFormID, other.anatomy});
+                }
+                ledger.RecordPartners(baseFormID, partners, static_cast<int>(actorCount));
+            }
+        }
 
         // Process each actor in the thread
         std::set<LL::ActKey> actKeys;

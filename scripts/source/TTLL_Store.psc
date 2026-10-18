@@ -144,3 +144,24 @@ Bool Function AddHistoryToPartner(Actor npc, Int encounters, Int solo, Int vagin
 ; Same, with a stand-in past lover of akRace and gender (0 male, 1 female) as the partner.
 ; Past lovers are not actors: GetAllLovers does not return them; the ttll_get_npc_lovers decorator lists them.
 Function AddPastLover(Actor npc, Race akRace, Int gender, Int encounters, Int solo, Int vaginal, Int anal, Int oral) Global Native
+
+; ========================================================================================
+; First-Time Lines
+; ========================================================================================
+
+; One line per unique position whose scene is a first, newline-separated; "" when nothing is new.
+; "This is the first time Amy has had sex." for someone with no partnered encounters; otherwise one sentence
+; with every new partner gender, race and group size ("...has had sex with a man, with a Nord, and in a threesome."),
+; plus first vaginal / anal for position 0 (received) and the penetrating positions (given).
+; tags: the animation's comma-separated SexLab tags (Vaginal, Anal; position 0 receives). On P+ pass stage tags.
+; slTotal / slVaginal / slAnal: each position's SexLab counts, so history not yet in the ledger is not taken as a first.
+; anatomy: each position's SexLab anatomy, 1 penis + 2 vagina (gender faction override, P+ futa = 3); -1 = base sex.
+; It decides who receives / penetrates and "with a man / a woman / a futa".
+; With "Add virgin blood to first sexual encounter" on (SkyrimNet dashboard), first received vaginal / anal adds a
+; sore and bleeding line. Call it before the scene ends (the ledger counts the scene at AnimationEnd).
+; SexLab callers: TTLL_SexlabIntegration.GetFirstTimes(positions, tags) fills the counts.
+String Function DescribeFirstTimes(Actor[] positions, String tags, Int[] slTotal, Int[] slVaginal, Int[] slAnal, Int[] anatomy) Global Native
+
+; SkyrimNet entity UUID (hex, SkyrimNetApi.GetEntityUUID) as decimal digits; "" if not hex.
+; Put it unquoted in decision context JSON: decnpc() needs a number, not a string.
+String Function UuidToDecimal(String hexUuid) Global Native

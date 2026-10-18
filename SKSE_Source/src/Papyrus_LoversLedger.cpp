@@ -1,5 +1,7 @@
+#include <charconv>
 #include <optional>
 
+#include "FirstTimes.h"
 #include "LoversLedgerService.h"
 #include "PCH.h"
 #include "UniqueOverrides.h"
@@ -257,6 +259,42 @@ namespace LL_Papyrus {
                                                              LL::SexLabHistory{encounters, solo, vaginal, anal, oral});
     }
 
+    // First-time lines for a scene; the Int arrays are per position: SexLab counts (missing = 0) and
+    // SexLab anatomy, 1 penis | 2 vagina (missing or -1 = base sex)
+    RE::BSFixedString DescribeFirstTimes(RE::StaticFunctionTag*, std::vector<RE::Actor*> positions,
+                                         RE::BSFixedString tags, std::vector<std::int32_t> slTotal,
+                                         std::vector<std::int32_t> slVaginal, std::vector<std::int32_t> slAnal,
+                                         std::vector<std::int32_t> anatomy) {
+        auto at = [](const std::vector<std::int32_t>& values, std::size_t i, std::int32_t missing = 0) {
+            return i < values.size() ? values[i] : missing;
+        };
+        std::vector<LL::FirstTimePosition> scene;
+        scene.reserve(positions.size());
+        for (std::size_t i = 0; i < positions.size(); ++i) {
+            if (!positions[i]) { SKSE::log::warn("DescribeFirstTimes: null actor at position {}", i); return ""; }
+            scene.push_back(LL::FirstTimePosition{positions[i], at(slTotal, i), at(slVaginal, i), at(slAnal, i),
+                                                  at(anatomy, i, -1)});
+        }
+        auto result = LL::DescribeFirstTimes(scene, tags.c_str());
+        SKSE::log::trace("DescribeFirstTimes: {} positions, tags={}, result={}", positions.size(), tags.c_str(),
+                         result);
+        return RE::BSFixedString(result.c_str());
+    }
+
+    // SkyrimNet entity UUID (hex, from GetEntityUUID) as a decimal string; "" if not hex.
+    // Decision context needs it as an unquoted JSON number: decnpc() rejects a string.
+    RE::BSFixedString UuidToDecimal(RE::StaticFunctionTag*, RE::BSFixedString hexUuid) {
+        std::string_view in(hexUuid.c_str() ? hexUuid.c_str() : "");
+        if (in.size() >= 2 && in[0] == '0' && (in[1] == 'x' || in[1] == 'X')) in.remove_prefix(2);
+        std::uint64_t value = 0;
+        auto [end, ec] = std::from_chars(in.data(), in.data() + in.size(), value, 16);
+        if (in.empty() || ec != std::errc() || end != in.data() + in.size()) {
+            SKSE::log::warn("UuidToDecimal: not a hex UUID '{}'", hexUuid.c_str() ? hexUuid.c_str() : "");
+            return "";
+        }
+        return RE::BSFixedString(std::to_string(value).c_str());
+    }
+
     // Register function called by SKSE Papyrus interface
     bool RegisterLoversLedgerPapyrus(RE::BSScript::IVirtualMachine* a_vm) {
         // Generic getters with dot-separated property paths
@@ -288,6 +326,10 @@ namespace LL_Papyrus {
         a_vm->RegisterFunction("ClaimSexLabCheck", "TTLL_Store", ClaimSexLabCheck);
         a_vm->RegisterFunction("AddHistoryToPartner", "TTLL_Store", AddHistoryToPartner);
         a_vm->RegisterFunction("AddPastLover", "TTLL_Store", AddPastLover);
+
+        a_vm->RegisterFunction("DescribeFirstTimes", "TTLL_Store", DescribeFirstTimes);
+
+        a_vm->RegisterFunction("UuidToDecimal", "TTLL_Store", UuidToDecimal);
 
         return true;
     }

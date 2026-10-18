@@ -332,10 +332,11 @@ Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, boo
     if count > 0
         TTLL_ThreadsCollector.SetThreadBool(threadKey, "hadSex", true)
         TTLL_ThreadsCollector.SetThreadStr(threadKey, "lastSexualSceneId", SceneId(thread, pplus))
-        ; Positions are participants even without an act (2-position tag acts in a 3-way): the actor count decides exclusive / group
+        ; Positions are participants even without an act (2-position tag acts in a 3-way): the actor count decides exclusive / group.
+        ; Setting anatomy creates the actor and gives first-time partner traits SexLab's gender (override, futa).
         Actor[] positions = thread.Positions
         while i < positions.Length
-            TTLL_ThreadsCollector.SetActorInt(threadKey, positions[i], "participant", 0)
+            TTLL_ThreadsCollector.SetActorInt(threadKey, positions[i], "anatomy", Anatomy(slf, positions[i], pplus))
             i += 1
         endwhile
     endif
@@ -752,6 +753,47 @@ EndFunction
 ; TTLL_PL_Busy 1 while a decision is out.
 ; ========================================================================================
 
+; First-time lines for a SexLab animation (see TTLL_Store.DescribeFirstTimes); passes each position's SexLab counts
+String Function GetFirstTimes(Actor[] positions, string tags) global
+    SexLabFramework slf = Game.GetFormFromFile(0xD62, "SexLab.esm") as SexLabFramework
+    bool pplus = IsPPlus()
+    int[] total = PapyrusUtil.IntArray(positions.Length)
+    int[] vaginal = PapyrusUtil.IntArray(positions.Length)
+    int[] anal = PapyrusUtil.IntArray(positions.Length)
+    int[] anatomy = PapyrusUtil.IntArray(positions.Length, -1)
+    int i = 0
+    while i < positions.Length
+        if positions[i]
+            if pplus || slf
+                anatomy[i] = Anatomy(slf, positions[i], pplus)
+            endif
+            if pplus
+                total[i] = TTLL_SexlabPPlus.GetCount(positions[i], 15)
+                vaginal[i] = TTLL_SexlabPPlus.GetCount(positions[i], 10)
+                anal[i] = TTLL_SexlabPPlus.GetCount(positions[i], 11)
+            elseif slf
+                total[i] = slf.Stats.GetSkill(positions[i], "SexCount")
+                vaginal[i] = slf.Stats.GetSkill(positions[i], "VaginalCount")
+                anal[i] = slf.Stats.GetSkill(positions[i], "AnalCount")
+            endif
+        endif
+        i += 1
+    endwhile
+    return TTLL_Store.DescribeFirstTimes(positions, tags, total, vaginal, anal, anatomy)
+EndFunction
+
+; SexLab anatomy for the native side: 1 penis + 2 vagina (gender faction override, P+ futa)
+int Function Anatomy(SexLabFramework slf, Actor npc, bool pplus) global
+    int bits = 0
+    if HasPenis(slf, npc, pplus)
+        bits += 1
+    endif
+    if HasVagina(slf, npc, pplus)
+        bits += 2
+    endif
+    return bits
+EndFunction
+
 Function CheckThreadHistory(TTLL_MainController mainController, SexLabFramework slf, Actor[] actors) global
     int i = 0
     while i < actors.Length
@@ -824,11 +866,15 @@ Function SendPastLover(TTLL_MainController mainController) global
     endif
     Actor npc = StorageUtil.FormListGet(none, "TTLL_PL_A", 0) as Actor
     if npc && Game.GetModByName("SkyrimNet.esp") != 255
-        string context = "{\"npc_uuid\":\"" + SkyrimNetApi.GetEntityUUID(npc) + "\"}"
-        if SkyrimNetApi.SendCustomDecisionToLLM("loversledger/past_lover", context, mainController, \
-                "TTLL_MainController", "OnPastLoverDecision") == 1
-            StorageUtil.SetIntValue(none, "TTLL_PL_Busy", 1)
-            return
+        ; decnpc() needs the UUID as a JSON number; GetEntityUUID returns hex
+        string uuid = TTLL_Store.UuidToDecimal(SkyrimNetApi.GetEntityUUID(npc))
+        if uuid != ""
+            string context = "{\"npc_uuid\":" + uuid + "}"
+            if SkyrimNetApi.SendCustomDecisionToLLM("loversledger/past_lover", context, mainController, \
+                    "TTLL_MainController", "OnPastLoverDecision") == 1
+                StorageUtil.SetIntValue(none, "TTLL_PL_Busy", 1)
+                return
+            endif
         endif
     endif
     FinishPastLover(mainController, "", "")

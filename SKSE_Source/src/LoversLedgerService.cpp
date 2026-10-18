@@ -1178,6 +1178,7 @@ namespace LL {
         _actorCountScenes.clear();
         _sexlabChecked.clear();
         _pastLovers.clear();
+        _partnerTraits.clear();
         SKSE::log::info("LoversLedgerService: All data cleared");
     }
 
@@ -1532,6 +1533,7 @@ namespace LL {
 
         SaveSceneCounts(a_intfc);
         SaveSexLabHistory(a_intfc);
+        SavePartnerTraits(a_intfc);
 
         SKSE::log::info("LoversLedgerService: Save complete");
     }
@@ -1550,6 +1552,10 @@ namespace LL {
             }
             if (type == kSexLabHistoryType) {
                 LoadSexLabHistory(a_intfc, version);
+                continue;
+            }
+            if (type == kPartnerTraitsType) {
+                LoadPartnerTraits(a_intfc, version);
                 continue;
             }
             if (type != kSerializationType) {
@@ -1778,6 +1784,11 @@ namespace LL {
         auto& npc = EnsureNPC(npcFormID);
         npc.lovers[partnerID].exclusiveSex += history.encounters;
         AddHistoryToNPC(npc, npcBase->GetSex() == RE::SEXES::kMale, partner->GetSex() == RE::SEXES::kMale, history);
+        if (history.encounters > 0) {
+            auto* partnerRace = partner->GetRace();
+            AddTraitIfSeeded(npcFormID, partnerRace ? partnerRace->GetFormID() : 0,
+                             partner->GetSex() == RE::SEXES::kMale, 2);
+        }
         SKSE::log::info("AddHistoryToPartner: NPC 0x{:X} partner 0x{:X} (rank {}) +{} encounters, +{} solo, "
                         "+{} vaginal, +{} anal, +{} oral",
                         npcFormID, partnerID, partnerRank, history.encounters, history.solo, history.vaginal,
@@ -1802,6 +1813,7 @@ namespace LL {
                 it = std::prev(pastLovers.end());
             }
             it->encounters += history.encounters;
+            AddTraitIfSeeded(npcFormID, raceFormID, sex == 0, 2);
         }
         AddHistoryToNPC(EnsureNPC(npcFormID), npcBase->GetSex() == RE::SEXES::kMale, sex == 0, history);
         SKSE::log::info("AddPastLover: NPC 0x{:X} past lover race 0x{:X} gender {} +{} encounters, +{} solo, "
@@ -1814,6 +1826,222 @@ namespace LL {
         std::shared_lock lock(_mutex);
         auto it = _pastLovers.find(npcFormID);
         return (it != _pastLovers.end()) ? it->second : std::vector<PastLover>{};
+    }
+
+    // ========================================================================================
+    // First-time partner traits
+    // ========================================================================================
+
+    int AnatomyOrBaseSex(int anatomy, bool baseMale) {
+        if (anatomy >= 0) return anatomy;
+        return baseMale ? kAnatomyPenis : kAnatomyVagina;
+    }
+
+    std::uint8_t PartnerGenderBit(RE::TESRace* race, int anatomy) {
+        if (race && !race->HasKeywordString("ActorTypeNPC")) return 0;
+        const bool penis = (anatomy & kAnatomyPenis) != 0;
+        const bool vagina = (anatomy & kAnatomyVagina) != 0;
+        if (penis && vagina) return kPartnerFuta;
+        if (penis) return kPartnerMale;
+        if (vagina) return kPartnerFemale;
+        return 0;
+    }
+
+    namespace {
+        void AddGroupSize(PartnerTraits& traits, int groupSize) {
+            if (traits.maxGroupSize == kGroupSizeUnknown) return;
+            const int size = std::clamp(groupSize, 0, kGroupSizeUnknown - 1);
+            traits.maxGroupSize = std::max(traits.maxGroupSize, static_cast<std::uint8_t>(size));
+        }
+    }  // namespace
+
+    PartnerTraits LoversLedgerService::SeedTraits(std::uint32_t npcFormID) const {
+        PartnerTraits traits;
+        int partnered = 0;
+        if (const auto* npc = FindNPC(npcFormID)) {
+            partnered = npc->exclusiveSex + npc->groupSex;
+            for (const auto& [loverID, lover] : npc->lovers) {
+                auto* loverBase = RE::TESForm::LookupByID<RE::TESNPC>(loverID);
+                if (!loverBase) {
+                    traits.unknownPartners = true;
+                    continue;
+                }
+                auto* race = loverBase->GetRace();
+                if (race) traits.races.insert(race->GetFormID());
+                // Base sex: SexLab overrides are only known while the lover is in a scene
+                traits.genders |= PartnerGenderBit(race, AnatomyOrBaseSex(-1, loverBase->GetSex() == RE::SEXES::kMale));
+            }
+            // Non-unique partners were counted without race or gender
+            if (npc->othersCount > 0 || !npc->legacyLovers.empty()) traits.unknownPartners = true;
+            if (npc->groupSex > 0) {
+                traits.maxGroupSize = kGroupSizeUnknown;
+            } else if (npc->exclusiveSex > 0) {
+                traits.maxGroupSize = 2;
+            }
+        }
+        if (auto it = _pastLovers.find(npcFormID); it != _pastLovers.end()) {
+            for (const auto& p : it->second) {
+                traits.races.insert(p.raceFormID);
+                traits.genders |= PartnerGenderBit(RE::TESForm::LookupByID<RE::TESRace>(p.raceFormID),
+                                                   AnatomyOrBaseSex(-1, p.gender == 0));
+                AddGroupSize(traits, 2);
+            }
+        }
+        // Encounters with no partner on record at all
+        if (partnered > 0 && traits.races.empty()) traits.unknownPartners = true;
+        return traits;
+    }
+
+    PartnerTraits& LoversLedgerService::EnsureTraits(std::uint32_t npcFormID) {
+        auto it = _partnerTraits.find(npcFormID);
+        if (it == _partnerTraits.end()) {
+            it = _partnerTraits.emplace(npcFormID, SeedTraits(npcFormID)).first;
+            SKSE::log::debug("EnsureTraits: seeded NPC 0x{:X}: {} races, genders {}, max group {}, unknown {}",
+                             npcFormID, it->second.races.size(), it->second.genders, it->second.maxGroupSize,
+                             it->second.unknownPartners);
+        }
+        return it->second;
+    }
+
+    void LoversLedgerService::AddTraitIfSeeded(std::uint32_t npcFormID, std::uint32_t raceFormID, bool male,
+                                               int groupSize) {
+        auto it = _partnerTraits.find(npcFormID);
+        if (it == _partnerTraits.end()) return;  // the seed will read the new lover / past lover
+        if (raceFormID != 0) it->second.races.insert(raceFormID);
+        it->second.genders |= PartnerGenderBit(RE::TESForm::LookupByID<RE::TESRace>(raceFormID),
+                                               AnatomyOrBaseSex(-1, male));
+        AddGroupSize(it->second, groupSize);
+    }
+
+    void LoversLedgerService::RecordPartners(std::uint32_t npcFormID, const std::vector<PartnerRef>& partnerRefs,
+                                             int actorCount) {
+        if (npcFormID == 0 || partnerRefs.empty()) return;
+
+        struct Partner {
+            std::uint32_t raceFormID{0};
+            std::uint8_t gender{0};
+            bool known{false};
+        };
+        std::vector<Partner> partners;
+        partners.reserve(partnerRefs.size());
+        for (const auto& ref : partnerRefs) {
+            auto* form = RE::TESForm::LookupByID(ref.refFormID);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            auto* base = actor ? actor->GetActorBase() : nullptr;
+            auto* race = actor ? actor->GetRace() : nullptr;
+            if (!base || !race) {
+                partners.push_back(Partner{});
+                continue;
+            }
+            const int anatomy = AnatomyOrBaseSex(ref.anatomy, base->GetSex() == RE::SEXES::kMale);
+            partners.push_back(Partner{race->GetFormID(), PartnerGenderBit(race, anatomy), true});
+        }
+
+        std::unique_lock lock(_mutex);
+        auto& traits = EnsureTraits(npcFormID);
+        for (const auto& p : partners) {
+            if (!p.known) {
+                traits.unknownPartners = true;
+                continue;
+            }
+            traits.races.insert(p.raceFormID);
+            traits.genders |= p.gender;
+        }
+        AddGroupSize(traits, actorCount);
+        SKSE::log::debug("RecordPartners: NPC 0x{:X} +{} partners, {} races, genders {}, max group {}", npcFormID,
+                         partners.size(), traits.races.size(), traits.genders, traits.maxGroupSize);
+    }
+
+    FirstTimeHistory LoversLedgerService::GetFirstTimeHistory(std::uint32_t npcFormID) const {
+        FirstTimeHistory history;
+        if (npcFormID == 0) return history;
+
+        // Read only: an NPC that never has the scene keeps no traits entry
+        std::shared_lock lock(_mutex);
+        auto it = _partnerTraits.find(npcFormID);
+        history.traits = (it != _partnerTraits.end()) ? it->second : SeedTraits(npcFormID);
+        if (const auto* npc = FindNPC(npcFormID)) {
+            history.partnered = npc->exclusiveSex + npc->groupSex;
+            auto count = [&](bool isDid, const char* action) {
+                const auto& map = SelectActionMap<std::unordered_map<std::string, int>>(*npc, isDid);
+                auto found = map.find(Canonical(action));
+                return (found != map.end()) ? found->second : 0;
+            };
+            history.vaginalDid = count(true, "vaginalsex");
+            history.vaginalGot = count(false, "vaginalsex");
+            history.analDid = count(true, "analsex");
+            history.analGot = count(false, "analsex");
+        }
+        return history;
+    }
+
+    // Caller must hold the lock
+    void LoversLedgerService::SavePartnerTraits(SKSE::SerializationInterface* a_intfc) const {
+        if (!a_intfc->OpenRecord(kPartnerTraitsType, kPartnerTraitsVersion)) {
+            SKSE::log::error("Failed to open partner traits record");
+            return;
+        }
+
+        std::uint32_t count = static_cast<std::uint32_t>(_partnerTraits.size());
+        if (!WriteData(a_intfc, count, "PartnerTraits.npc count")) return;
+        for (const auto& [npcFormID, traits] : _partnerTraits) {
+            std::uint32_t raceCount = static_cast<std::uint32_t>(traits.races.size());
+            if (!WriteData(a_intfc, npcFormID, "PartnerTraits.npc") ||
+                !WriteData(a_intfc, traits.genders, "PartnerTraits.genders") ||
+                !WriteData(a_intfc, traits.maxGroupSize, "PartnerTraits.maxGroupSize") ||
+                !WriteData(a_intfc, traits.unknownPartners, "PartnerTraits.unknownPartners") ||
+                !WriteData(a_intfc, raceCount, "PartnerTraits.race count")) {
+                return;
+            }
+            for (auto raceFormID : traits.races) {
+                if (!WriteData(a_intfc, raceFormID, "PartnerTraits.race")) return;
+            }
+        }
+        SKSE::log::info("Saved partner traits for {} NPCs", _partnerTraits.size());
+    }
+
+    void LoversLedgerService::LoadPartnerTraits(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        if (version != kPartnerTraitsVersion) {
+            SKSE::log::error("Unsupported partner traits version: {}", version);
+            return;
+        }
+
+        std::unordered_map<std::uint32_t, PartnerTraits> partnerTraits;
+        std::uint32_t count = 0;
+        if (!ReadData(a_intfc, count, "PartnerTraits.npc count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t npcFormID = 0;
+            std::uint32_t raceCount = 0;
+            PartnerTraits traits;
+            if (!ReadData(a_intfc, npcFormID, "PartnerTraits.npc") ||
+                !ReadData(a_intfc, traits.genders, "PartnerTraits.genders") ||
+                !ReadData(a_intfc, traits.maxGroupSize, "PartnerTraits.maxGroupSize") ||
+                !ReadData(a_intfc, traits.unknownPartners, "PartnerTraits.unknownPartners") ||
+                !ReadData(a_intfc, raceCount, "PartnerTraits.race count")) {
+                return;
+            }
+            for (std::uint32_t j = 0; j < raceCount; ++j) {
+                std::uint32_t raceFormID = 0;
+                if (!ReadData(a_intfc, raceFormID, "PartnerTraits.race")) return;
+                std::uint32_t resolved = 0;
+                if (a_intfc->ResolveFormID(raceFormID, resolved)) {
+                    traits.races.insert(resolved);
+                } else {
+                    // A partner race from a removed plugin: its firsts can no longer be told apart
+                    traits.unknownPartners = true;
+                }
+            }
+            std::uint32_t resolvedNPC = 0;
+            if (!a_intfc->ResolveFormID(npcFormID, resolvedNPC)) {
+                SKSE::log::warn("LoadPartnerTraits: dropping traits of unresolved NPC 0x{:X}", npcFormID);
+                continue;
+            }
+            partnerTraits[resolvedNPC] = std::move(traits);
+        }
+
+        std::unique_lock lock(_mutex);
+        _partnerTraits = std::move(partnerTraits);
+        SKSE::log::info("Loaded partner traits for {} NPCs", _partnerTraits.size());
     }
 
     void LoversLedgerService::SaveSexLabHistory(SKSE::SerializationInterface* a_intfc) const {
@@ -1932,6 +2160,7 @@ namespace LL {
             _store.erase(it);
             _sexlabChecked.erase(npcFormID);
             _pastLovers.erase(npcFormID);
+            _partnerTraits.erase(npcFormID);
         } else {
             SKSE::log::warn("DeleteNPCData: NPC 0x{:X} not found", npcFormID);
         }

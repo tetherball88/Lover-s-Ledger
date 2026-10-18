@@ -19,6 +19,9 @@ namespace LL {
     // SexLab history backfill (checked NPCs, past lovers) in its own record, same reason
     constexpr std::uint32_t kSexLabHistoryVersion = 1;
     constexpr std::uint32_t kSexLabHistoryType = 'LLPL';  // LoversLedger Past Lovers
+    // Partner traits for first-time lines, own record for the same reason
+    constexpr std::uint32_t kPartnerTraitsVersion = 1;
+    constexpr std::uint32_t kPartnerTraitsType = 'LLPT';  // LoversLedger Partner Traits
 
     // Counts SexLab holds that the ledger does not, copied once per NPC
     struct SexLabHistory {
@@ -34,6 +37,45 @@ namespace LL {
         std::uint32_t raceFormID{0};
         std::int8_t gender{0};  // 0 = male, 1 = female
         int encounters{0};
+    };
+
+    // Partner genders for PartnerTraits::genders
+    constexpr std::uint8_t kPartnerMale = 1;
+    constexpr std::uint8_t kPartnerFemale = 2;
+    constexpr std::uint8_t kPartnerFuta = 4;
+    // SexLab anatomy bits (gender faction override, P+ futa); -1 = unknown, use the base sex
+    constexpr int kAnatomyPenis = 1;
+    constexpr int kAnatomyVagina = 2;
+
+    // Anatomy from the base sex when SexLab gave none
+    int AnatomyOrBaseSex(int anatomy, bool baseMale);
+    // Gender bit for a partner of that anatomy; 0 for creatures (race without ActorTypeNPC)
+    std::uint8_t PartnerGenderBit(RE::TESRace* race, int anatomy);
+
+    // A scene participant for RecordPartners
+    struct PartnerRef {
+        std::uint32_t refFormID{0};
+        int anatomy{-1};
+    };
+    // PartnerTraits::maxGroupSize when an old save had group sex of unknown size
+    constexpr std::uint8_t kGroupSizeUnknown = 255;
+
+    // Who an NPC has had partnered sex with; seeded once from older ledger data, then kept per scene
+    struct PartnerTraits {
+        std::uint8_t genders{0};  // kPartnerMale | kPartnerFemale | kPartnerFuta, NPC-type partners only
+        std::unordered_set<std::uint32_t> races;
+        std::uint8_t maxGroupSize{0};  // most actors in one partnered scene
+        bool unknownPartners{false};   // some partners' race / gender were never recorded
+    };
+
+    // What DescribeFirstTimes needs from the ledger for one NPC
+    struct FirstTimeHistory {
+        int partnered{0};  // exclusive + group encounters
+        PartnerTraits traits;
+        int vaginalDid{0};
+        int vaginalGot{0};
+        int analDid{0};
+        int analGot{0};
     };
 
     // Directions for ActKey::dir
@@ -213,6 +255,12 @@ namespace LL {
         void AddPastLover(std::uint32_t npcFormID, std::uint32_t raceFormID, int gender, const SexLabHistory& history);
         std::vector<PastLover> GetPastLovers(std::uint32_t npcFormID) const;
 
+        // First-time lines: adds the scene's other participants to the NPC's partner traits.
+        // Call before the scene is applied to the ledger, so the one-time seed sees only older data.
+        void RecordPartners(std::uint32_t npcFormID, const std::vector<PartnerRef>& partners, int actorCount);
+        // Ledger history the first-time lines compare a scene with (seeds the traits on first use)
+        FirstTimeHistory GetFirstTimeHistory(std::uint32_t npcFormID) const;
+
     private:
         LoversLedgerService() = default;
         ~LoversLedgerService() = default;
@@ -233,6 +281,16 @@ namespace LL {
         void LoadSexLabHistory(SKSE::SerializationInterface* a_intfc, std::uint32_t version);
         // Caller must hold unique_lock. NPC totals and did/got actions for the history.
         void AddHistoryToNPC(NPCData& npc, bool npcMale, bool partnerMale, const SexLabHistory& history);
+
+        // Partner traits record; SavePartnerTraits expects the caller to hold the lock
+        void SavePartnerTraits(SKSE::SerializationInterface* a_intfc) const;
+        void LoadPartnerTraits(SKSE::SerializationInterface* a_intfc, std::uint32_t version);
+        // Caller must hold a lock. Traits derived from lovers / past lovers / totals (older data).
+        PartnerTraits SeedTraits(std::uint32_t npcFormID) const;
+        // Caller must hold unique_lock. The NPC's traits, seeded on first use.
+        PartnerTraits& EnsureTraits(std::uint32_t npcFormID);
+        // Caller must hold unique_lock. Adds a known partner to traits that already exist (backfill paths).
+        void AddTraitIfSeeded(std::uint32_t npcFormID, std::uint32_t raceFormID, bool male, int groupSize);
 
         // v1 → v2 migration helpers
         static bool IsTempFormID(std::uint32_t id) noexcept { return (id >> 24) == 0xFF; }
@@ -261,6 +319,9 @@ namespace LL {
         // SexLab backfill state; saved in the kSexLabHistoryType record
         std::unordered_set<std::uint32_t> _sexlabChecked;
         std::unordered_map<std::uint32_t, std::vector<PastLover>> _pastLovers;
+
+        // First-time partner traits; saved in the kPartnerTraitsType record
+        std::unordered_map<std::uint32_t, PartnerTraits> _partnerTraits;
 
         // Action-name synonyms: member -> cluster word; loaded once at data load
         std::unordered_map<std::string, std::string> _canonical;

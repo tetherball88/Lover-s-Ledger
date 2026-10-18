@@ -39,6 +39,7 @@ namespace LL {
 
         bool orgasmed{false};
         bool hadSameSexEncounter{false};
+        int anatomy{-1};  // SexLab anatomy (LL::kAnatomyPenis | LL::kAnatomyVagina); -1 = unset, use base sex
         std::string encounterType;
 
         ExcitementContribution excitementContribution;
@@ -48,6 +49,7 @@ namespace LL {
             got.clear();
             orgasmed = false;
             hadSameSexEncounter = false;
+            anatomy = -1;
             encounterType.clear();
             excitementContribution.Clear();
         }
