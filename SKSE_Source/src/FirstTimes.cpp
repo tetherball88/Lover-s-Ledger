@@ -126,7 +126,7 @@ namespace LL {
                 std::vector<std::string> genders;
                 if (newGenders & kPartnerMale) genders.emplace_back("a man");
                 if (newGenders & kPartnerFemale) genders.emplace_back("a woman");
-                if (newGenders & kPartnerFuta) genders.emplace_back("a futa");
+                if (newGenders & kPartnerFuta) genders.emplace_back("an intersex partner");
                 if (!genders.empty()) clauses.push_back("with " + JoinList(genders));
                 if (!newRaces.empty()) clauses.push_back("with " + JoinList(newRaces));
             }

@@ -978,10 +978,14 @@ EndFunction
 
 ; AE GetGender: 0 male, 1 female, 2 creature male, 3 creature female (gender faction overrides apply)
 ; P+ GetSex: 0 male, 1 female, 2 futa, 3 creature male, 4 creature female
+; AE has no futa: an intersex pick (IsChosenIntersex) counts as both.
 bool Function HasPenis(SexLabFramework slf, Actor npc, bool pplus) global
     if pplus
         int sex = TTLL_SexlabPPlus.GetSex(npc)
         return sex == 0 || sex == 2 || sex == 3
+    endif
+    if IsChosenIntersex(npc)
+        return true
     endif
     int gender = slf.GetGender(npc)
     return gender == 0 || gender == 2
@@ -1014,6 +1018,15 @@ bool Function HasVagina(SexLabFramework slf, Actor npc, bool pplus) global
         int sex = TTLL_SexlabPPlus.GetSex(npc)
         return sex == 1 || sex == 2 || sex == 4
     endif
+    if IsChosenIntersex(npc)
+        return true
+    endif
     int gender = slf.GetGender(npc)
     return gender == 1 || gender == 3
+EndFunction
+
+; SkyrimNet_SexLab Actor Info intersex pick (StorageUtil, 2 = intersex). On AE it is a TreatAsGender to
+; the other sex, so GetGender alone reads it as that sex.
+bool Function IsChosenIntersex(Actor npc) global
+    return StorageUtil.GetIntValue(npc, "SkyrimNet_SexLab_ChosenSex", -1) == 2
 EndFunction

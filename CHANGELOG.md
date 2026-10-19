@@ -42,6 +42,7 @@ Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, 
 - **First-time sentence per scene**: new `SKSE_Source/src/FirstTimes.h/.cpp` builds one line per unique actor whose scene is a first: first sex, new partner gender / race / group size, first vaginal / anal given or received, and an optional virgin-blood line.
 - `LoversLedgerService`: `PartnerTraits` / `FirstTimeHistory`, seeded from older data, saved as `LLPT`, cleared with the NPC. `ThreadsCollector` calls `RecordPartners` before the scene is applied.
 - `TTLL_Store.DescribeFirstTimes` native and the `TTLL_SexlabIntegration.GetFirstTimes(positions, tags)` wrapper, which fills SexLab counts and anatomy.
+- **Intersex partners**: on SexLab AE, a SkyrimNet_SexLab Actor Info intersex pick (StorageUtil `SkyrimNet_SexLab_ChosenSex` = 2, set as a `TreatAsGender` to the other sex) counts as penis + vagina (`TTLL_SexlabIntegration.IsChosenIntersex` in `HasPenis` / `HasVagina`), so acts, same-sex flags, partner traits and first-time lines no longer read it as the forced sex. The first-time partner gender for penis + vagina reads "an intersex partner" (was "a futa").
 - SkyrimNet dashboard toggle "Add virgin blood to first sexual encounter" (`config/plugins/LoversLedger/manifest.yaml`, off by default). SkyrimNet plugin `manifest.json` version 1.0.3.
 
 ### Bug fixes
