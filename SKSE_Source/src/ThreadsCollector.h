@@ -15,11 +15,13 @@ namespace LL {
         float rate{0.0f};     // Current excitement contribution rate
         float total{0.0f};    // Total accumulated excitement
         float orgasms{0.0f};  // Orgasm contribution share
+        double lastUpdated{0.0};  // Timestamp of the last accrual for this contributor
 
         void Reset() {
             rate = 0.0f;
             total = 0.0f;
             orgasms = 0.0f;
+            lastUpdated = 0.0;
         }
     };
 
@@ -37,6 +39,7 @@ namespace LL {
 
         bool orgasmed{false};
         bool hadSameSexEncounter{false};
+        int anatomy{-1};  // SexLab anatomy (LL::kAnatomyPenis | LL::kAnatomyVagina); -1 = unset, use base sex
         std::string encounterType;
 
         ExcitementContribution excitementContribution;
@@ -46,6 +49,7 @@ namespace LL {
             got.clear();
             orgasmed = false;
             hadSameSexEncounter = false;
+            anatomy = -1;
             encounterType.clear();
             excitementContribution.Clear();
         }
@@ -55,7 +59,6 @@ namespace LL {
     struct ThreadData {
         bool finished{false};
         bool hadSex{false};
-        double prevExcitementStarted{0.0};
         std::string lastSexualSceneId;
 
         std::unordered_map<std::uint32_t, ThreadActor> actors;  // Key: actor FormID
@@ -63,7 +66,6 @@ namespace LL {
         void Clear() {
             finished = false;
             hadSex = false;
-            prevExcitementStarted = 0.0f;
             lastSexualSceneId.clear();
             actors.clear();
         }
@@ -92,6 +94,8 @@ namespace LL {
 
         // Excitement contribution system
         void ExcitementContributorOrgasm(std::int32_t threadID, std::uint32_t actorFormID);
+        void ExcitementContributorOrgasmWeighted(std::int32_t threadID, std::uint32_t actorFormID,
+                                                 const std::vector<std::pair<std::uint32_t, float>>& weights);
         void UpdateExcitementRate(std::int32_t threadID, std::uint32_t actorFormID, std::uint32_t loverFormID,
                                   float rate);
 

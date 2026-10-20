@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <set>
 
 #include "LoversLedgerService.h"
 #include "ThreadsCollector.h"
@@ -185,23 +186,97 @@ namespace LL {
         }
 
         auto& contributors = actorIt->second.excitementContribution.contributors;
-
-        // Calculate total contribution
-        float totalContribution = 0.0f;
-        for (const auto& [_, contrib] : contributors) {
-            totalContribution += contrib.total;
-        }
-
-        if (totalContribution <= 0.0f) {
+        if (contributors.empty()) {
             return;
         }
 
-        // Distribute orgasm shares proportionally
+        // Flush accrual up to now so the time since the last rate change counts
+        const double currentTime = GetCurrentTimestamp();
+        float totalContribution = 0.0f;
         for (auto& [_, contrib] : contributors) {
-            float share = contrib.total / totalContribution;
-            contrib.orgasms += share;
+            if (contrib.lastUpdated > 0.0) {
+                contrib.total += static_cast<float>((currentTime - contrib.lastUpdated) * contrib.rate);
+            }
+            contrib.lastUpdated = currentTime;
+            totalContribution += contrib.total;
+        }
+
+        if (totalContribution > 0.0f) {
+            // Distribute orgasm shares proportionally
+            for (auto& [_, contrib] : contributors) {
+                contrib.orgasms += contrib.total / totalContribution;
+            }
+        } else {
+            // Nothing accrued yet: split evenly across active partners, else across all partners
+            std::vector<ExcitementContributor*> recipients;
+            for (auto& [loverFormID, contrib] : contributors) {
+                if (loverFormID != actorFormID && contrib.rate > 0.0f) {
+                    recipients.push_back(&contrib);
+                }
+            }
+            if (recipients.empty()) {
+                for (auto& [loverFormID, contrib] : contributors) {
+                    if (loverFormID != actorFormID) {
+                        recipients.push_back(&contrib);
+                    }
+                }
+            }
+            for (auto* contrib : recipients) {
+                contrib->orgasms += 1.0f / static_cast<float>(recipients.size());
+            }
+        }
+
+        // Reset totals but keep rates, so accrual continues until the next scene change
+        for (auto& [_, contrib] : contributors) {
             contrib.total = 0.0f;
-            contrib.rate = 0.0f;
+        }
+    }
+
+    void ThreadsCollector::ExcitementContributorOrgasmWeighted(
+        std::int32_t threadID, std::uint32_t actorFormID, const std::vector<std::pair<std::uint32_t, float>>& weights) {
+        std::unique_lock lock(_mutex);
+
+        auto threadIt = _threads.find(threadID);
+        if (threadIt == _threads.end()) {
+            return;
+        }
+
+        auto actorIt = threadIt->second.actors.find(actorFormID);
+        if (actorIt == threadIt->second.actors.end()) {
+            return;
+        }
+
+        auto& contributors = actorIt->second.excitementContribution.contributors;
+        if (contributors.empty()) {
+            return;
+        }
+
+        // Only weights of existing contributors count; never create one here
+        float totalWeight = 0.0f;
+        for (const auto& [loverFormID, weight] : weights) {
+            if (weight > 0.0f && contributors.contains(loverFormID)) {
+                totalWeight += weight;
+            }
+        }
+        if (totalWeight <= 0.0f) {
+            return;
+        }
+
+        for (const auto& [loverFormID, weight] : weights) {
+            if (weight <= 0.0f) {
+                continue;
+            }
+            auto it = contributors.find(loverFormID);
+            if (it != contributors.end()) {
+                it->second.orgasms += weight / totalWeight;
+            }
+        }
+
+        // This orgasm replaced the time split: drop accrual up to now but keep rates
+        const double currentTime = GetCurrentTimestamp();
+        for (auto& [_, contrib] : contributors) {
+            contrib.total = 0.0f;
+            contrib.lastUpdated = currentTime;
         }
     }
 
@@ -209,21 +284,20 @@ namespace LL {
                                                 std::uint32_t loverFormID, float rate) {
         std::unique_lock lock(_mutex);
 
-        auto& thread = _threads[threadID];
-        auto& contributor = thread.actors[actorFormID].excitementContribution.contributors[loverFormID];
+        auto& contributor = _threads[threadID].actors[actorFormID].excitementContribution.contributors[loverFormID];
 
         // Get current timestamp
         double currentTime = GetCurrentTimestamp();
 
-        // Calculate delta time and add accumulated excitement
-        if (thread.prevExcitementStarted > 0.0) {
-            double delta = currentTime - thread.prevExcitementStarted;
+        // Accrue with the previous rate since this contributor's last update
+        if (contributor.lastUpdated > 0.0) {
+            double delta = currentTime - contributor.lastUpdated;
             contributor.total += static_cast<float>(delta * contributor.rate);
         }
 
         // Update rate and timestamp
         contributor.rate = rate;
-        thread.prevExcitementStarted = currentTime;
+        contributor.lastUpdated = currentTime;
     }
 
     // ========================================================================================
@@ -304,11 +378,14 @@ namespace LL {
 
     // Actor-level getters
     int ThreadsCollector::GetActorInt(std::int32_t threadID, std::uint32_t actorFormID,
-                                      [[maybe_unused]] std::string_view propName) const {
+                                      std::string_view propName) const {
         const auto* actor = FindActor(threadID, actorFormID);
         if (!actor) return 0;
 
-        // No int properties at actor level currently
+        auto parts = ParsePropertyPath(propName);
+        if (parts.size() == 1 && parts[0] == "anatomy") {
+            return actor->anatomy;
+        }
         return 0;
     }
 
@@ -350,12 +427,16 @@ namespace LL {
     }
 
     // Actor-level setters
-    void ThreadsCollector::SetActorInt(std::int32_t threadID, std::uint32_t actorFormID,
-                                       [[maybe_unused]] std::string_view propName, [[maybe_unused]] int value) {
-        [[maybe_unused]] std::unique_lock lock(_mutex);
-        [[maybe_unused]] auto& actor = _threads[threadID].actors[actorFormID];
+    void ThreadsCollector::SetActorInt(std::int32_t threadID, std::uint32_t actorFormID, std::string_view propName,
+                                       int value) {
+        std::unique_lock lock(_mutex);
+        auto& actor = _threads[threadID].actors[actorFormID];
 
-        // No int properties at actor level currently
+        // Any other name only creates the actor (feeders use "participant")
+        auto parts = ParsePropertyPath(propName);
+        if (parts.size() == 1 && parts[0] == "anatomy") {
+            actor.anatomy = value;
+        }
     }
 
     void ThreadsCollector::SetActorFlt(std::int32_t threadID, std::uint32_t actorFormID,
@@ -413,8 +494,9 @@ namespace LL {
             auto* actor = form ? form->As<RE::Actor>() : nullptr;
             if (!actor) return {0, false};
             auto* base = LL::GetStableBase(actor);
+            if (!base) return {0, false};
             SKSE::log::debug("ResolveUniqueBaseID: 0x{:X}({}) -> base 0x{:X} ({})", refFormID, actor->GetName(), base->GetFormID(), base->GetName());
-            if (!base || !LL::IsEffectivelyUnique(base)) return {0, false};
+            if (!LL::IsEffectivelyUnique(base)) return {0, false};
             return {base->GetFormID(), true};
         }
 
@@ -502,12 +584,49 @@ namespace LL {
                 }
             }
         }
+
+        // Helper: Add the wildcard-expanded global counter keys for one actor's acts.
+        // Counts every participant (unique or not); skips actors that are no longer loaded.
+        void CollectActKeys(std::uint32_t actorFormID, const ThreadActor& actorData, std::set<LL::ActKey>& keys) {
+            auto* form = RE::TESForm::LookupByID(actorFormID);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            auto* base = actor ? actor->GetActorBase() : nullptr;
+            if (!base) {
+                SKSE::log::trace("CollectActKeys: actor 0x{:X} not loaded, skipping", actorFormID);
+                return;
+            }
+            auto* race = actor->GetRace();
+            const std::uint32_t raceID = race ? race->GetFormID() : 0;
+            const auto gender = static_cast<std::int8_t>(base->GetSex());
+
+            auto addAct = [&](const std::string& rawType, std::uint8_t dir) {
+                // Cluster word: two synonyms in one scene collapse to one key in the set
+                const std::string type = LL::LoversLedgerService::GetSingleton().Canonical(rawType);
+                for (std::uint32_t r : {raceID, 0u}) {
+                    for (std::int8_t g : {gender, std::int8_t(-1)}) {
+                        for (const std::string& t : {type, std::string()}) {
+                            for (std::uint8_t d : {dir, LL::kActDirAny}) {
+                                keys.insert(LL::ActKey{r, g, t, d});
+                            }
+                        }
+                    }
+                }
+            };
+            for (const auto& [type, _] : actorData.did) {
+                addAct(type, LL::kActDirGave);
+            }
+            for (const auto& [type, _] : actorData.got) {
+                addAct(type, LL::kActDirReceived);
+            }
+        }
     }  // namespace
 
     void ThreadsCollector::ApplyThreadToLedger(std::int32_t threadID) {
         std::shared_lock lock(_mutex);
 
-        const auto* thread = FindThread(threadID);
+        // _mutex is not recursive: look up directly instead of FindThread
+        auto threadIt = _threads.find(threadID);
+        const auto* thread = (threadIt != _threads.end()) ? &threadIt->second : nullptr;
         if (!thread) {
             SKSE::log::warn("ThreadsCollector::ApplyThreadToLedger - Thread {} not found", threadID);
             return;
@@ -518,12 +637,28 @@ namespace LL {
 
         auto& ledger = LL::LoversLedgerService::GetSingleton();
 
+        // First-time partner traits, before this scene changes the totals their one-time seed reads
+        if (actorCount >= 2) {
+            for (const auto& [actorFormID, _] : thread->actors) {
+                auto [baseFormID, isUnique] = ResolveUniqueBaseID(actorFormID);
+                if (!isUnique) continue;
+                std::vector<LL::PartnerRef> partners;
+                for (const auto& [otherFormID, other] : thread->actors) {
+                    if (otherFormID != actorFormID) partners.push_back(LL::PartnerRef{otherFormID, other.anatomy});
+                }
+                ledger.RecordPartners(baseFormID, partners, static_cast<int>(actorCount));
+            }
+        }
+
         // Process each actor in the thread
+        std::set<LL::ActKey> actKeys;
         for (const auto& [actorFormID, actorData] : thread->actors) {
             ApplyActorBasicData(ledger, actorFormID, actorData, encounterType);
             ApplyActorActions(ledger, actorFormID, actorData);
             ApplyExcitementContributions(ledger, actorFormID, actorData, actorCount);
+            CollectActKeys(actorFormID, actorData, actKeys);
         }
+        ledger.RecordScene({actKeys.begin(), actKeys.end()}, static_cast<int>(actorCount));
 
         SKSE::log::info("ThreadsCollector: Applied thread {} data to ledger ({} actors)", threadID, actorCount);
     }

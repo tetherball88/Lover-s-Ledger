@@ -84,6 +84,21 @@ String[] Function GetAllActions(Actor npc, Bool isDid, Int topK = -1) Global Nat
 Int Function GetActionCount(Actor npc, Bool isDid, String actionName) Global Native
 
 ; ========================================================================================
+; Global Scene Counters (every participant, unique or not; one count per scene)
+; ========================================================================================
+
+; Scenes where a participant of akRace/gender gave or received actionType
+; akRace: None = any race (exact Race form, so vampire variants are separate)
+; gender: -1 = any, 0 = male, 1 = female (ActorBase.GetSex)
+; actionType: "" = any act
+; direction: "any" (default), "gave", "received"
+; Example: HowManyTimes(None, 1, "anal") returns scenes where a female of any race had anal
+Int Function HowManyTimes(Race akRace = None, Int gender = -1, String actionType = "", String direction = "any") Global Native
+
+; Scenes with exactly numActors participants; numActors <= 0 returns all recorded scenes
+Int Function HowManyTimesWith(Int numActors = 0) Global Native
+
+; ========================================================================================
 ; Counter Functions
 ; ========================================================================================
 
@@ -113,3 +128,40 @@ Form[] Function GetAllLovers(Actor npc, Int topK = -1) Global Native
 ; Example: GetLoverScore(npc, lover) returns the calculated score for that lover
 Float Function GetLoverScore(Actor npc, Actor lover) Global Native
 
+
+; ========================================================================================
+; SexLab History Backfill
+; ========================================================================================
+
+; True the first time it is called for a unique NPC (and claims it); false after and for non-unique NPCs
+Bool Function ClaimSexLabCheck(Actor npc) Global Native
+
+; Adds SexLab history the ledger lacks to the NPC's game relationship partner (spouse > lover > courting):
+; encounters to the NPC and partner, solo and vaginal/anal/oral acts to the NPC.
+; Returns false and changes nothing when the NPC has no such partner.
+Bool Function AddHistoryToPartner(Actor npc, Int encounters, Int solo, Int vaginal, Int anal, Int oral) Global Native
+
+; Same, with a stand-in past lover of akRace and gender (0 male, 1 female) as the partner.
+; Past lovers are not actors: GetAllLovers does not return them; the ttll_get_npc_lovers decorator lists them.
+Function AddPastLover(Actor npc, Race akRace, Int gender, Int encounters, Int solo, Int vaginal, Int anal, Int oral) Global Native
+
+; ========================================================================================
+; First-Time Lines
+; ========================================================================================
+
+; One line per unique position whose scene is a first, newline-separated; "" when nothing is new.
+; "This is the first time Amy has had sex." for someone with no partnered encounters; otherwise one sentence
+; with every new partner gender, race and group size ("...has had sex with a man, with a Nord, and in a threesome."),
+; plus first vaginal / anal for position 0 (received) and the penetrating positions (given).
+; tags: the animation's comma-separated SexLab tags (Vaginal, Anal; position 0 receives). On P+ pass stage tags.
+; slTotal / slVaginal / slAnal: each position's SexLab counts, so history not yet in the ledger is not taken as a first.
+; anatomy: each position's SexLab anatomy, 1 penis + 2 vagina (gender faction override, P+ futa or a SkyrimNet_SexLab intersex pick = 3); -1 = base sex.
+; It decides who receives / penetrates and "with a man / a woman / an intersex partner".
+; With "Add virgin blood to first sexual encounter" on (SkyrimNet dashboard), first received vaginal / anal adds a
+; sore and bleeding line. Call it before the scene ends (the ledger counts the scene at AnimationEnd).
+; SexLab callers: TTLL_SexlabIntegration.GetFirstTimes(positions, tags) fills the counts.
+String Function DescribeFirstTimes(Actor[] positions, String tags, Int[] slTotal, Int[] slVaginal, Int[] slAnal, Int[] anatomy) Global Native
+
+; SkyrimNet entity UUID (hex, SkyrimNetApi.GetEntityUUID) as decimal digits; "" if not hex.
+; Put it unquoted in decision context JSON: decnpc() needs a number, not a string.
+String Function UuidToDecimal(String hexUuid) Global Native

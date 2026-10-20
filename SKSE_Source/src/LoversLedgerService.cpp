@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+
+#include <nlohmann/json.hpp>
 
 #include "UniqueOverrides.h"
 
@@ -521,8 +525,8 @@ namespace LL {
         SKSE::log::debug("UpdateActions: npc=0x{:X}, didGot={}, {} actions", npcFormID, didGot, actions.size());
 
         for (const auto& action : actions) {
-            ++actionMap[ToLower(action)];
-            SKSE::log::trace("  Action '{}' count now: {}", action, actionMap[ToLower(action)]);
+            const int count = ++actionMap[Canonical(action)];
+            SKSE::log::trace("  Action '{}' count now: {}", action, count);
         }
     }
 
@@ -975,8 +979,8 @@ namespace LL {
         loverScores.reserve(npc->lovers.size());
 
         for (const auto& [loverID, loverData] : npc->lovers) {
-            // Calculate score for each lover - reuse GetLoverScore logic
-            float score = GetLoverScore(npcFormID, loverID);
+            // _mutex is already held and is not recursive: score without re-locking
+            float score = ScoreLover(loverData);
             loverScores.emplace_back(loverID, score);
         }
 
@@ -1038,8 +1042,74 @@ namespace LL {
         }
 
         const auto& actionMap = SelectActionMap<std::unordered_map<std::string, int>>(*npc, isDid);
-        auto it = actionMap.find(ToLower(actionName));
+        auto it = actionMap.find(Canonical(actionName));
         return (it != actionMap.end()) ? it->second : 0;
+    }
+
+    std::string LoversLedgerService::Canonical(std::string_view name) const {
+        std::string lower = ToLower(name);
+        auto it = _canonical.find(lower);
+        return (it != _canonical.end()) ? it->second : lower;
+    }
+
+    void LoversLedgerService::CanonicalizeActions(NPCData& npc) const {
+        for (auto* map : {&npc.actions_did, &npc.actions_got}) {
+            std::unordered_map<std::string, int> merged;
+            for (const auto& [name, count] : *map) merged[Canonical(name)] += count;
+            *map = std::move(merged);
+        }
+    }
+
+    void LoversLedgerService::LoadSynonyms() {
+        const std::filesystem::path path = "Data/SKSE/Plugins/LoversLedger/synonyms.json";
+        std::unordered_map<std::string, std::string> canonical;
+        int clusters = 0;
+        try {
+            std::ifstream file(path);
+            if (!file.is_open()) {
+                SKSE::log::warn("LoadSynonyms: '{}' not found, action names match exactly", path.string());
+                return;
+            }
+            const auto json = nlohmann::json::parse(file);
+            for (const auto& cluster : json.at("clusters")) {
+                if (cluster.empty()) continue;
+                // First member is the stored word; a name in two clusters keeps its first cluster
+                const std::string word = ToLower(cluster.front().get<std::string>());
+                for (const auto& m : cluster) canonical.try_emplace(ToLower(m.get<std::string>()), word);
+                ++clusters;
+            }
+        } catch (const std::exception& e) {
+            SKSE::log::warn("LoadSynonyms: failed to parse '{}': {}; action names match exactly", path.string(),
+                            e.what());
+            return;
+        }
+        std::unique_lock lock(_mutex);
+        _canonical = std::move(canonical);
+        SKSE::log::info("LoadSynonyms: loaded {} synonym clusters", clusters);
+    }
+
+    void LoversLedgerService::RecordScene(const std::vector<ActKey>& keys, int actorCount) {
+        std::unique_lock lock(_mutex);
+        for (const auto& key : keys) {
+            ++_actCounts[key];
+        }
+        ++_actorCountScenes[actorCount];
+        ++_actorCountScenes[0];
+        SKSE::log::debug("RecordScene: {} actors, {} counter keys", actorCount, keys.size());
+    }
+
+    int LoversLedgerService::HowManyTimes(std::uint32_t raceFormID, int gender, std::string_view type,
+                                          std::uint8_t dir) const {
+        ActKey key{raceFormID, static_cast<std::int8_t>(gender < 0 ? -1 : gender), Canonical(type), dir};
+        std::shared_lock lock(_mutex);
+        auto it = _actCounts.find(key);
+        return (it != _actCounts.end()) ? it->second : 0;
+    }
+
+    int LoversLedgerService::HowManyTimesWith(int numActors) const {
+        std::shared_lock lock(_mutex);
+        auto it = _actorCountScenes.find(numActors > 0 ? numActors : 0);
+        return (it != _actorCountScenes.end()) ? it->second : 0;
     }
 
     float LoversLedgerService::GetLoverScore(std::uint32_t npcFormID, std::uint32_t loverFormID) const {
@@ -1058,8 +1128,10 @@ namespace LL {
             return 0.0f;
         }
 
-        const auto& lover = loverIt->second;
+        return ScoreLover(loverIt->second);
+    }
 
+    float LoversLedgerService::ScoreLover(const LoverData& lover) {
         // Extract lover data
         float orgasms = lover.orgasms;
         int exclSex = lover.exclusiveSex;
@@ -1102,6 +1174,11 @@ namespace LL {
         _store.clear();
         _legacyStore.clear();
         _globalRelationsScanDone = false;
+        _actCounts.clear();
+        _actorCountScenes.clear();
+        _sexlabChecked.clear();
+        _pastLovers.clear();
+        _partnerTraits.clear();
         SKSE::log::info("LoversLedgerService: All data cleared");
     }
 
@@ -1127,7 +1204,7 @@ namespace LL {
             auto* form = RE::TESForm::LookupByID(baseFormID);
             if (!form) return false;
             auto* npc = form->As<RE::TESNPC>();
-            return npc && npc->IsUnique();
+            return npc && LL::IsEffectivelyUnique(npc);
         };
 
         // Pass 1: remove invalid NPC entries from _store
@@ -1139,6 +1216,7 @@ namespace LL {
         }
         for (auto npcFormID : npcsToRemove) {
             _store.erase(npcFormID);
+            _pastLovers.erase(npcFormID);
             ++npcsRemoved;
             SKSE::log::debug("  Removed invalid NPC base FormID 0x{:X}", npcFormID);
         }
@@ -1453,6 +1531,10 @@ namespace LL {
             npcData.Save(a_intfc, npcFormID);
         }
 
+        SaveSceneCounts(a_intfc);
+        SaveSexLabHistory(a_intfc);
+        SavePartnerTraits(a_intfc);
+
         SKSE::log::info("LoversLedgerService: Save complete");
     }
 
@@ -1464,6 +1546,18 @@ namespace LL {
         std::uint32_t length;
 
         while (a_intfc->GetNextRecordInfo(type, version, length)) {
+            if (type == kSceneCountsType) {
+                LoadSceneCounts(a_intfc, version);
+                continue;
+            }
+            if (type == kSexLabHistoryType) {
+                LoadSexLabHistory(a_intfc, version);
+                continue;
+            }
+            if (type == kPartnerTraitsType) {
+                LoadPartnerTraits(a_intfc, version);
+                continue;
+            }
             if (type != kSerializationType) {
                 continue;
             }
@@ -1523,6 +1617,7 @@ namespace LL {
                             SKSE::log::error("Failed to load NPC data for base FormID 0x{:X}", resolvedNPCID);
                             continue;
                         }
+                        CanonicalizeActions(npcData);
                         _store[resolvedNPCID] = std::move(npcData);
                     } else {
                         // v1: NPC key is a raw Actor refFormID — store as-is in legacyStore for later migration
@@ -1531,6 +1626,7 @@ namespace LL {
                             SKSE::log::error("Failed to load legacy NPC data for formID 0x{:X}", npcFormID);
                             continue;
                         }
+                        CanonicalizeActions(npcData);
                         _legacyStore[npcFormID] = std::move(npcData);
                     }
                 }
@@ -1539,6 +1635,498 @@ namespace LL {
                                 _store.size(), _legacyStore.size());
             }  // lock released here
         }
+    }
+
+    // Caller must hold the lock
+    void LoversLedgerService::SaveSceneCounts(SKSE::SerializationInterface* a_intfc) const {
+        if (!a_intfc->OpenRecord(kSceneCountsType, kSceneCountsVersion)) {
+            SKSE::log::error("Failed to open scene counts record");
+            return;
+        }
+
+        std::uint32_t count = static_cast<std::uint32_t>(_actCounts.size());
+        if (!WriteData(a_intfc, count, "SceneCounts.act count")) return;
+        for (const auto& [key, value] : _actCounts) {
+            if (!WriteData(a_intfc, key.raceFormID, "ActKey.race") || !WriteData(a_intfc, key.gender, "ActKey.gender") ||
+                !SaveString(a_intfc, key.type, "ActKey.type") || !WriteData(a_intfc, key.dir, "ActKey.dir") ||
+                !WriteData(a_intfc, value, "ActKey.count")) {
+                return;
+            }
+        }
+
+        count = static_cast<std::uint32_t>(_actorCountScenes.size());
+        if (!WriteData(a_intfc, count, "SceneCounts.actorCount count")) return;
+        for (const auto& [numActors, value] : _actorCountScenes) {
+            if (!WriteData(a_intfc, numActors, "ActorCount.n") || !WriteData(a_intfc, value, "ActorCount.count")) {
+                return;
+            }
+        }
+        SKSE::log::info("Saved scene counts: {} act keys, {} actor-count buckets", _actCounts.size(),
+                        _actorCountScenes.size());
+    }
+
+    void LoversLedgerService::LoadSceneCounts(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        if (version != kSceneCountsVersion) {
+            SKSE::log::error("Unsupported scene counts version: {}", version);
+            return;
+        }
+
+        std::unordered_map<ActKey, int, ActKeyHash> actCounts;
+        std::unordered_map<int, int> actorCountScenes;
+
+        std::uint32_t count = 0;
+        if (!ReadData(a_intfc, count, "SceneCounts.act count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            ActKey key;
+            int value = 0;
+            if (!ReadData(a_intfc, key.raceFormID, "ActKey.race") || !ReadData(a_intfc, key.gender, "ActKey.gender") ||
+                !LoadString(a_intfc, key.type, "ActKey.type") || !ReadData(a_intfc, key.dir, "ActKey.dir") ||
+                !ReadData(a_intfc, value, "ActKey.count")) {
+                return;
+            }
+            if (key.raceFormID != 0) {
+                std::uint32_t resolved = 0;
+                if (!a_intfc->ResolveFormID(key.raceFormID, resolved)) {
+                    SKSE::log::warn("LoadSceneCounts: dropping counter for unresolved race 0x{:X}", key.raceFormID);
+                    continue;
+                }
+                key.raceFormID = resolved;
+            }
+            // Saves from before synonym words may hold one scene under two names of a cluster; merged here
+            key.type = Canonical(key.type);
+            actCounts[std::move(key)] += value;
+        }
+
+        if (!ReadData(a_intfc, count, "SceneCounts.actorCount count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            int numActors = 0;
+            int value = 0;
+            if (!ReadData(a_intfc, numActors, "ActorCount.n") || !ReadData(a_intfc, value, "ActorCount.count")) {
+                return;
+            }
+            actorCountScenes[numActors] = value;
+        }
+
+        std::unique_lock lock(_mutex);
+        _actCounts = std::move(actCounts);
+        _actorCountScenes = std::move(actorCountScenes);
+        SKSE::log::info("Loaded scene counts: {} act keys, {} actor-count buckets", _actCounts.size(),
+                        _actorCountScenes.size());
+    }
+
+    // ========================================================================================
+    // SexLab history backfill
+    // ========================================================================================
+
+    bool LoversLedgerService::ClaimSexLabCheck(std::uint32_t npcFormID) {
+        if (npcFormID == 0) return false;
+        std::unique_lock lock(_mutex);
+        return _sexlabChecked.insert(npcFormID).second;
+    }
+
+    void LoversLedgerService::AddHistoryToNPC(NPCData& npc, bool npcMale, bool partnerMale,
+                                              const SexLabHistory& history) {
+        npc.exclusiveSex += history.encounters;
+        npc.soloSex += history.solo;
+
+        // SexLab counts acts per scene without a side; the male side penetrates
+        auto addAct = [&](const char* action, bool isDid, int count) {
+            if (count > 0) {
+                SelectActionMap<std::unordered_map<std::string, int>>(npc, isDid)[Canonical(action)] += count;
+            }
+        };
+        addAct("vaginalsex", npcMale, history.vaginal);
+        addAct("analsex", npcMale, history.anal);
+        if (npcMale) {
+            addAct("blowjob", false, history.oral);
+        } else if (partnerMale) {
+            addAct("blowjob", true, history.oral);
+        } else {
+            addAct("cunnilingus", false, history.oral);
+        }
+    }
+
+    bool LoversLedgerService::AddHistoryToPartner(std::uint32_t npcFormID, const SexLabHistory& history) {
+        auto* npcBase = RE::TESForm::LookupByID<RE::TESNPC>(npcFormID);
+        auto* dataHandler = RE::TESDataHandler::GetSingleton();
+        if (!npcBase || !dataHandler) return false;
+
+        // Same relationship classes as ScanAllGameRelationships; spouse wins over lover over courting
+        constexpr std::uint32_t kAssocSpouse   = 0x000142CA;
+        constexpr std::uint32_t kAssocCourting = 0x0001EE23;
+        RE::TESNPC* partner = nullptr;
+        int partnerRank = 0;
+        for (auto* relForm : dataHandler->GetFormArray<RE::BGSRelationship>()) {
+            if (!relForm || !relForm->npc1 || !relForm->npc2) continue;
+            RE::TESNPC* other = relForm->npc1 == npcBase   ? relForm->npc2
+                                : relForm->npc2 == npcBase ? relForm->npc1
+                                                           : nullptr;
+            if (!other || other == npcBase || !IsEffectivelyUnique(other)) continue;
+
+            const std::uint32_t assocID = relForm->assocType ? relForm->assocType->GetFormID() : 0;
+            int rank = 0;
+            if (assocID == kAssocSpouse) {
+                rank = 3;
+            } else if (assocID == kAssocCourting) {
+                rank = 1;
+            } else if (relForm->level == RE::BGSRelationship::RELATIONSHIP_LEVEL::kLover) {
+                rank = 2;
+            }
+            if (rank > partnerRank) {
+                partner = other;
+                partnerRank = rank;
+            }
+        }
+        if (!partner) return false;
+
+        const std::uint32_t partnerID = partner->GetFormID();
+        std::unique_lock lock(_mutex);
+        auto& npc = EnsureNPC(npcFormID);
+        npc.lovers[partnerID].exclusiveSex += history.encounters;
+        AddHistoryToNPC(npc, npcBase->GetSex() == RE::SEXES::kMale, partner->GetSex() == RE::SEXES::kMale, history);
+        if (history.encounters > 0) {
+            auto* partnerRace = partner->GetRace();
+            AddTraitIfSeeded(npcFormID, partnerRace ? partnerRace->GetFormID() : 0,
+                             partner->GetSex() == RE::SEXES::kMale, 2);
+        }
+        SKSE::log::info("AddHistoryToPartner: NPC 0x{:X} partner 0x{:X} (rank {}) +{} encounters, +{} solo, "
+                        "+{} vaginal, +{} anal, +{} oral",
+                        npcFormID, partnerID, partnerRank, history.encounters, history.solo, history.vaginal,
+                        history.anal, history.oral);
+        return true;
+    }
+
+    void LoversLedgerService::AddPastLover(std::uint32_t npcFormID, std::uint32_t raceFormID, int gender,
+                                           const SexLabHistory& history) {
+        auto* npcBase = RE::TESForm::LookupByID<RE::TESNPC>(npcFormID);
+        if (!npcBase) return;
+        const auto sex = static_cast<std::int8_t>(gender == 1 ? 1 : 0);
+
+        std::unique_lock lock(_mutex);
+        if (history.encounters > 0) {
+            auto& pastLovers = _pastLovers[npcFormID];
+            auto it = std::find_if(pastLovers.begin(), pastLovers.end(), [&](const PastLover& p) {
+                return p.raceFormID == raceFormID && p.gender == sex;
+            });
+            if (it == pastLovers.end()) {
+                pastLovers.push_back(PastLover{raceFormID, sex, 0});
+                it = std::prev(pastLovers.end());
+            }
+            it->encounters += history.encounters;
+            AddTraitIfSeeded(npcFormID, raceFormID, sex == 0, 2);
+        }
+        AddHistoryToNPC(EnsureNPC(npcFormID), npcBase->GetSex() == RE::SEXES::kMale, sex == 0, history);
+        SKSE::log::info("AddPastLover: NPC 0x{:X} past lover race 0x{:X} gender {} +{} encounters, +{} solo, "
+                        "+{} vaginal, +{} anal, +{} oral",
+                        npcFormID, raceFormID, sex, history.encounters, history.solo, history.vaginal, history.anal,
+                        history.oral);
+    }
+
+    std::vector<PastLover> LoversLedgerService::GetPastLovers(std::uint32_t npcFormID) const {
+        std::shared_lock lock(_mutex);
+        auto it = _pastLovers.find(npcFormID);
+        return (it != _pastLovers.end()) ? it->second : std::vector<PastLover>{};
+    }
+
+    // ========================================================================================
+    // First-time partner traits
+    // ========================================================================================
+
+    int AnatomyOrBaseSex(int anatomy, bool baseMale) {
+        if (anatomy >= 0) return anatomy;
+        return baseMale ? kAnatomyPenis : kAnatomyVagina;
+    }
+
+    std::uint8_t PartnerGenderBit(RE::TESRace* race, int anatomy) {
+        if (race && !race->HasKeywordString("ActorTypeNPC")) return 0;
+        const bool penis = (anatomy & kAnatomyPenis) != 0;
+        const bool vagina = (anatomy & kAnatomyVagina) != 0;
+        if (penis && vagina) return kPartnerFuta;
+        if (penis) return kPartnerMale;
+        if (vagina) return kPartnerFemale;
+        return 0;
+    }
+
+    namespace {
+        void AddGroupSize(PartnerTraits& traits, int groupSize) {
+            if (traits.maxGroupSize == kGroupSizeUnknown) return;
+            const int size = std::clamp(groupSize, 0, kGroupSizeUnknown - 1);
+            traits.maxGroupSize = std::max(traits.maxGroupSize, static_cast<std::uint8_t>(size));
+        }
+    }  // namespace
+
+    PartnerTraits LoversLedgerService::SeedTraits(std::uint32_t npcFormID) const {
+        PartnerTraits traits;
+        int partnered = 0;
+        if (const auto* npc = FindNPC(npcFormID)) {
+            partnered = npc->exclusiveSex + npc->groupSex;
+            for (const auto& [loverID, lover] : npc->lovers) {
+                auto* loverBase = RE::TESForm::LookupByID<RE::TESNPC>(loverID);
+                if (!loverBase) {
+                    traits.unknownPartners = true;
+                    continue;
+                }
+                auto* race = loverBase->GetRace();
+                if (race) traits.races.insert(race->GetFormID());
+                // Base sex: SexLab overrides are only known while the lover is in a scene
+                traits.genders |= PartnerGenderBit(race, AnatomyOrBaseSex(-1, loverBase->GetSex() == RE::SEXES::kMale));
+            }
+            // Non-unique partners were counted without race or gender
+            if (npc->othersCount > 0 || !npc->legacyLovers.empty()) traits.unknownPartners = true;
+            if (npc->groupSex > 0) {
+                traits.maxGroupSize = kGroupSizeUnknown;
+            } else if (npc->exclusiveSex > 0) {
+                traits.maxGroupSize = 2;
+            }
+        }
+        if (auto it = _pastLovers.find(npcFormID); it != _pastLovers.end()) {
+            for (const auto& p : it->second) {
+                traits.races.insert(p.raceFormID);
+                traits.genders |= PartnerGenderBit(RE::TESForm::LookupByID<RE::TESRace>(p.raceFormID),
+                                                   AnatomyOrBaseSex(-1, p.gender == 0));
+                AddGroupSize(traits, 2);
+            }
+        }
+        // Encounters with no partner on record at all
+        if (partnered > 0 && traits.races.empty()) traits.unknownPartners = true;
+        return traits;
+    }
+
+    PartnerTraits& LoversLedgerService::EnsureTraits(std::uint32_t npcFormID) {
+        auto it = _partnerTraits.find(npcFormID);
+        if (it == _partnerTraits.end()) {
+            it = _partnerTraits.emplace(npcFormID, SeedTraits(npcFormID)).first;
+            SKSE::log::debug("EnsureTraits: seeded NPC 0x{:X}: {} races, genders {}, max group {}, unknown {}",
+                             npcFormID, it->second.races.size(), it->second.genders, it->second.maxGroupSize,
+                             it->second.unknownPartners);
+        }
+        return it->second;
+    }
+
+    void LoversLedgerService::AddTraitIfSeeded(std::uint32_t npcFormID, std::uint32_t raceFormID, bool male,
+                                               int groupSize) {
+        auto it = _partnerTraits.find(npcFormID);
+        if (it == _partnerTraits.end()) return;  // the seed will read the new lover / past lover
+        if (raceFormID != 0) it->second.races.insert(raceFormID);
+        it->second.genders |= PartnerGenderBit(RE::TESForm::LookupByID<RE::TESRace>(raceFormID),
+                                               AnatomyOrBaseSex(-1, male));
+        AddGroupSize(it->second, groupSize);
+    }
+
+    void LoversLedgerService::RecordPartners(std::uint32_t npcFormID, const std::vector<PartnerRef>& partnerRefs,
+                                             int actorCount) {
+        if (npcFormID == 0 || partnerRefs.empty()) return;
+
+        struct Partner {
+            std::uint32_t raceFormID{0};
+            std::uint8_t gender{0};
+            bool known{false};
+        };
+        std::vector<Partner> partners;
+        partners.reserve(partnerRefs.size());
+        for (const auto& ref : partnerRefs) {
+            auto* form = RE::TESForm::LookupByID(ref.refFormID);
+            auto* actor = form ? form->As<RE::Actor>() : nullptr;
+            auto* base = actor ? actor->GetActorBase() : nullptr;
+            auto* race = actor ? actor->GetRace() : nullptr;
+            if (!base || !race) {
+                partners.push_back(Partner{});
+                continue;
+            }
+            const int anatomy = AnatomyOrBaseSex(ref.anatomy, base->GetSex() == RE::SEXES::kMale);
+            partners.push_back(Partner{race->GetFormID(), PartnerGenderBit(race, anatomy), true});
+        }
+
+        std::unique_lock lock(_mutex);
+        auto& traits = EnsureTraits(npcFormID);
+        for (const auto& p : partners) {
+            if (!p.known) {
+                traits.unknownPartners = true;
+                continue;
+            }
+            traits.races.insert(p.raceFormID);
+            traits.genders |= p.gender;
+        }
+        AddGroupSize(traits, actorCount);
+        SKSE::log::debug("RecordPartners: NPC 0x{:X} +{} partners, {} races, genders {}, max group {}", npcFormID,
+                         partners.size(), traits.races.size(), traits.genders, traits.maxGroupSize);
+    }
+
+    FirstTimeHistory LoversLedgerService::GetFirstTimeHistory(std::uint32_t npcFormID) const {
+        FirstTimeHistory history;
+        if (npcFormID == 0) return history;
+
+        // Read only: an NPC that never has the scene keeps no traits entry
+        std::shared_lock lock(_mutex);
+        auto it = _partnerTraits.find(npcFormID);
+        history.traits = (it != _partnerTraits.end()) ? it->second : SeedTraits(npcFormID);
+        if (const auto* npc = FindNPC(npcFormID)) {
+            history.partnered = npc->exclusiveSex + npc->groupSex;
+            auto count = [&](bool isDid, const char* action) {
+                const auto& map = SelectActionMap<std::unordered_map<std::string, int>>(*npc, isDid);
+                auto found = map.find(Canonical(action));
+                return (found != map.end()) ? found->second : 0;
+            };
+            history.vaginalDid = count(true, "vaginalsex");
+            history.vaginalGot = count(false, "vaginalsex");
+            history.analDid = count(true, "analsex");
+            history.analGot = count(false, "analsex");
+        }
+        return history;
+    }
+
+    // Caller must hold the lock
+    void LoversLedgerService::SavePartnerTraits(SKSE::SerializationInterface* a_intfc) const {
+        if (!a_intfc->OpenRecord(kPartnerTraitsType, kPartnerTraitsVersion)) {
+            SKSE::log::error("Failed to open partner traits record");
+            return;
+        }
+
+        std::uint32_t count = static_cast<std::uint32_t>(_partnerTraits.size());
+        if (!WriteData(a_intfc, count, "PartnerTraits.npc count")) return;
+        for (const auto& [npcFormID, traits] : _partnerTraits) {
+            std::uint32_t raceCount = static_cast<std::uint32_t>(traits.races.size());
+            if (!WriteData(a_intfc, npcFormID, "PartnerTraits.npc") ||
+                !WriteData(a_intfc, traits.genders, "PartnerTraits.genders") ||
+                !WriteData(a_intfc, traits.maxGroupSize, "PartnerTraits.maxGroupSize") ||
+                !WriteData(a_intfc, traits.unknownPartners, "PartnerTraits.unknownPartners") ||
+                !WriteData(a_intfc, raceCount, "PartnerTraits.race count")) {
+                return;
+            }
+            for (auto raceFormID : traits.races) {
+                if (!WriteData(a_intfc, raceFormID, "PartnerTraits.race")) return;
+            }
+        }
+        SKSE::log::info("Saved partner traits for {} NPCs", _partnerTraits.size());
+    }
+
+    void LoversLedgerService::LoadPartnerTraits(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        if (version != kPartnerTraitsVersion) {
+            SKSE::log::error("Unsupported partner traits version: {}", version);
+            return;
+        }
+
+        std::unordered_map<std::uint32_t, PartnerTraits> partnerTraits;
+        std::uint32_t count = 0;
+        if (!ReadData(a_intfc, count, "PartnerTraits.npc count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t npcFormID = 0;
+            std::uint32_t raceCount = 0;
+            PartnerTraits traits;
+            if (!ReadData(a_intfc, npcFormID, "PartnerTraits.npc") ||
+                !ReadData(a_intfc, traits.genders, "PartnerTraits.genders") ||
+                !ReadData(a_intfc, traits.maxGroupSize, "PartnerTraits.maxGroupSize") ||
+                !ReadData(a_intfc, traits.unknownPartners, "PartnerTraits.unknownPartners") ||
+                !ReadData(a_intfc, raceCount, "PartnerTraits.race count")) {
+                return;
+            }
+            for (std::uint32_t j = 0; j < raceCount; ++j) {
+                std::uint32_t raceFormID = 0;
+                if (!ReadData(a_intfc, raceFormID, "PartnerTraits.race")) return;
+                std::uint32_t resolved = 0;
+                if (a_intfc->ResolveFormID(raceFormID, resolved)) {
+                    traits.races.insert(resolved);
+                } else {
+                    // A partner race from a removed plugin: its firsts can no longer be told apart
+                    traits.unknownPartners = true;
+                }
+            }
+            std::uint32_t resolvedNPC = 0;
+            if (!a_intfc->ResolveFormID(npcFormID, resolvedNPC)) {
+                SKSE::log::warn("LoadPartnerTraits: dropping traits of unresolved NPC 0x{:X}", npcFormID);
+                continue;
+            }
+            partnerTraits[resolvedNPC] = std::move(traits);
+        }
+
+        std::unique_lock lock(_mutex);
+        _partnerTraits = std::move(partnerTraits);
+        SKSE::log::info("Loaded partner traits for {} NPCs", _partnerTraits.size());
+    }
+
+    void LoversLedgerService::SaveSexLabHistory(SKSE::SerializationInterface* a_intfc) const {
+        if (!a_intfc->OpenRecord(kSexLabHistoryType, kSexLabHistoryVersion)) {
+            SKSE::log::error("Failed to open SexLab history record");
+            return;
+        }
+
+        std::uint32_t count = static_cast<std::uint32_t>(_sexlabChecked.size());
+        if (!WriteData(a_intfc, count, "SexLabHistory.checked count")) return;
+        for (auto npcFormID : _sexlabChecked) {
+            if (!WriteData(a_intfc, npcFormID, "SexLabHistory.checked")) return;
+        }
+
+        count = static_cast<std::uint32_t>(_pastLovers.size());
+        if (!WriteData(a_intfc, count, "SexLabHistory.npc count")) return;
+        for (const auto& [npcFormID, pastLovers] : _pastLovers) {
+            std::uint32_t loverCount = static_cast<std::uint32_t>(pastLovers.size());
+            if (!WriteData(a_intfc, npcFormID, "PastLover.npc") || !WriteData(a_intfc, loverCount, "PastLover.count")) {
+                return;
+            }
+            for (const auto& p : pastLovers) {
+                if (!WriteData(a_intfc, p.raceFormID, "PastLover.race") ||
+                    !WriteData(a_intfc, p.gender, "PastLover.gender") ||
+                    !WriteData(a_intfc, p.encounters, "PastLover.encounters")) {
+                    return;
+                }
+            }
+        }
+        SKSE::log::info("Saved SexLab history: {} checked NPCs, {} NPCs with past lovers", _sexlabChecked.size(),
+                        _pastLovers.size());
+    }
+
+    void LoversLedgerService::LoadSexLabHistory(SKSE::SerializationInterface* a_intfc, std::uint32_t version) {
+        if (version != kSexLabHistoryVersion) {
+            SKSE::log::error("Unsupported SexLab history version: {}", version);
+            return;
+        }
+
+        std::unordered_set<std::uint32_t> checked;
+        std::unordered_map<std::uint32_t, std::vector<PastLover>> pastLovers;
+
+        std::uint32_t count = 0;
+        if (!ReadData(a_intfc, count, "SexLabHistory.checked count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t npcFormID = 0;
+            if (!ReadData(a_intfc, npcFormID, "SexLabHistory.checked")) return;
+            std::uint32_t resolved = 0;
+            if (a_intfc->ResolveFormID(npcFormID, resolved)) {
+                checked.insert(resolved);
+            }
+        }
+
+        if (!ReadData(a_intfc, count, "SexLabHistory.npc count")) return;
+        for (std::uint32_t i = 0; i < count; ++i) {
+            std::uint32_t npcFormID = 0;
+            std::uint32_t loverCount = 0;
+            if (!ReadData(a_intfc, npcFormID, "PastLover.npc") || !ReadData(a_intfc, loverCount, "PastLover.count")) {
+                return;
+            }
+            std::uint32_t resolvedNPC = 0;
+            const bool npcResolved = a_intfc->ResolveFormID(npcFormID, resolvedNPC);
+            for (std::uint32_t j = 0; j < loverCount; ++j) {
+                PastLover p;
+                if (!ReadData(a_intfc, p.raceFormID, "PastLover.race") ||
+                    !ReadData(a_intfc, p.gender, "PastLover.gender") ||
+                    !ReadData(a_intfc, p.encounters, "PastLover.encounters")) {
+                    return;
+                }
+                std::uint32_t resolvedRace = 0;
+                if (!npcResolved || !a_intfc->ResolveFormID(p.raceFormID, resolvedRace)) {
+                    SKSE::log::warn("LoadSexLabHistory: dropping past lover of NPC 0x{:X} (race 0x{:X} unresolved)",
+                                    npcFormID, p.raceFormID);
+                    continue;
+                }
+                p.raceFormID = resolvedRace;
+                pastLovers[resolvedNPC].push_back(p);
+            }
+        }
+
+        std::unique_lock lock(_mutex);
+        _sexlabChecked = std::move(checked);
+        _pastLovers = std::move(pastLovers);
+        SKSE::log::info("Loaded SexLab history: {} checked NPCs, {} NPCs with past lovers", _sexlabChecked.size(),
+                        _pastLovers.size());
     }
 
     void LoversLedgerService::RevertCallback([[maybe_unused]] SKSE::SerializationInterface* a_intfc) {
@@ -1570,6 +2158,9 @@ namespace LL {
         if (it != _store.end()) {
             SKSE::log::info("DeleteNPCData: Deleting NPC 0x{:X}", npcFormID);
             _store.erase(it);
+            _sexlabChecked.erase(npcFormID);
+            _pastLovers.erase(npcFormID);
+            _partnerTraits.erase(npcFormID);
         } else {
             SKSE::log::warn("DeleteNPCData: NPC 0x{:X} not found", npcFormID);
         }

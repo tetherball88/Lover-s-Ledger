@@ -1,5 +1,7 @@
+#include <charconv>
 #include <optional>
 
+#include "FirstTimes.h"
 #include "LoversLedgerService.h"
 #include "PCH.h"
 #include "UniqueOverrides.h"
@@ -201,6 +203,26 @@ namespace LL_Papyrus {
         return result;
     }
 
+    // Global scene counters: None / -1 / "" = any; direction "gave" / "received", anything else = any
+    std::int32_t HowManyTimes(RE::StaticFunctionTag*, RE::TESRace* race, std::int32_t gender,
+                              RE::BSFixedString actionType, RE::BSFixedString direction) {
+        std::uint8_t dir = LL::kActDirAny;
+        if (_stricmp(direction.c_str(), "gave") == 0) {
+            dir = LL::kActDirGave;
+        } else if (_stricmp(direction.c_str(), "received") == 0) {
+            dir = LL::kActDirReceived;
+        }
+        auto result = LL::LoversLedgerService::GetSingleton().HowManyTimes(
+            race ? race->GetFormID() : 0, gender, actionType.c_str(), dir);
+        SKSE::log::trace("HowManyTimes: race=0x{:X}, gender={}, type={}, dir={}, result={}",
+                         race ? race->GetFormID() : 0, gender, actionType.c_str(), dir, result);
+        return result;
+    }
+
+    std::int32_t HowManyTimesWith(RE::StaticFunctionTag*, std::int32_t numActors) {
+        return LL::LoversLedgerService::GetSingleton().HowManyTimesWith(numActors);
+    }
+
     // Calculate lover score based on encounters, orgasms, and time decay
     float GetLoverScore(RE::StaticFunctionTag*, RE::Actor* npc, RE::Actor* lover) {
         if (!npc || !lover) { SKSE::log::warn("GetLoverScore: null actor"); return 0.0f; }
@@ -210,6 +232,67 @@ namespace LL_Papyrus {
         auto result = LL::LoversLedgerService::GetSingleton().GetLoverScore(*id, *lid);
         SKSE::log::trace("GetLoverScore: npc base=0x{:X}, lover base=0x{:X}, score={}", *id, *lid, result);
         return result;
+    }
+
+    // SexLab backfill: true once per unique NPC (the first call claims it)
+    bool ClaimSexLabCheck(RE::StaticFunctionTag*, RE::Actor* npc) {
+        auto id = UniqueBaseID(npc);
+        return id && LL::LoversLedgerService::GetSingleton().ClaimSexLabCheck(*id);
+    }
+
+    // Copies SexLab history onto the NPC's game relationship partner; false if it has none
+    bool AddHistoryToPartner(RE::StaticFunctionTag*, RE::Actor* npc, std::int32_t encounters, std::int32_t solo,
+                             std::int32_t vaginal, std::int32_t anal, std::int32_t oral) {
+        auto id = UniqueBaseID(npc);
+        if (!id) return false;
+        return LL::LoversLedgerService::GetSingleton().AddHistoryToPartner(
+            *id, LL::SexLabHistory{encounters, solo, vaginal, anal, oral});
+    }
+
+    // Copies SexLab history onto a stand-in past lover of that race and gender (0 male, 1 female)
+    void AddPastLover(RE::StaticFunctionTag*, RE::Actor* npc, RE::TESRace* race, std::int32_t gender,
+                      std::int32_t encounters, std::int32_t solo, std::int32_t vaginal, std::int32_t anal,
+                      std::int32_t oral) {
+        auto id = UniqueBaseID(npc);
+        if (!id || !race) { SKSE::log::warn("AddPastLover: non-unique NPC or null race"); return; }
+        LL::LoversLedgerService::GetSingleton().AddPastLover(*id, race->GetFormID(), gender,
+                                                             LL::SexLabHistory{encounters, solo, vaginal, anal, oral});
+    }
+
+    // First-time lines for a scene; the Int arrays are per position: SexLab counts (missing = 0) and
+    // SexLab anatomy, 1 penis | 2 vagina (missing or -1 = base sex)
+    RE::BSFixedString DescribeFirstTimes(RE::StaticFunctionTag*, std::vector<RE::Actor*> positions,
+                                         RE::BSFixedString tags, std::vector<std::int32_t> slTotal,
+                                         std::vector<std::int32_t> slVaginal, std::vector<std::int32_t> slAnal,
+                                         std::vector<std::int32_t> anatomy) {
+        auto at = [](const std::vector<std::int32_t>& values, std::size_t i, std::int32_t missing = 0) {
+            return i < values.size() ? values[i] : missing;
+        };
+        std::vector<LL::FirstTimePosition> scene;
+        scene.reserve(positions.size());
+        for (std::size_t i = 0; i < positions.size(); ++i) {
+            if (!positions[i]) { SKSE::log::warn("DescribeFirstTimes: null actor at position {}", i); return ""; }
+            scene.push_back(LL::FirstTimePosition{positions[i], at(slTotal, i), at(slVaginal, i), at(slAnal, i),
+                                                  at(anatomy, i, -1)});
+        }
+        auto result = LL::DescribeFirstTimes(scene, tags.c_str());
+        SKSE::log::trace("DescribeFirstTimes: {} positions, tags={}, result={}", positions.size(), tags.c_str(),
+                         result);
+        return RE::BSFixedString(result.c_str());
+    }
+
+    // SkyrimNet entity UUID (hex, from GetEntityUUID) as a decimal string; "" if not hex.
+    // Decision context needs it as an unquoted JSON number: decnpc() rejects a string.
+    RE::BSFixedString UuidToDecimal(RE::StaticFunctionTag*, RE::BSFixedString hexUuid) {
+        std::string_view in(hexUuid.c_str() ? hexUuid.c_str() : "");
+        if (in.size() >= 2 && in[0] == '0' && (in[1] == 'x' || in[1] == 'X')) in.remove_prefix(2);
+        std::uint64_t value = 0;
+        auto [end, ec] = std::from_chars(in.data(), in.data() + in.size(), value, 16);
+        if (in.empty() || ec != std::errc() || end != in.data() + in.size()) {
+            SKSE::log::warn("UuidToDecimal: not a hex UUID '{}'", hexUuid.c_str() ? hexUuid.c_str() : "");
+            return "";
+        }
+        return RE::BSFixedString(std::to_string(value).c_str());
     }
 
     // Register function called by SKSE Papyrus interface
@@ -230,6 +313,8 @@ namespace LL_Papyrus {
         a_vm->RegisterFunction("RecordAction", "TTLL_Store", RecordAction);
         a_vm->RegisterFunction("GetAllActions", "TTLL_Store", GetAllActions);
         a_vm->RegisterFunction("GetActionCount", "TTLL_Store", GetActionCount);
+        a_vm->RegisterFunction("HowManyTimes", "TTLL_Store", HowManyTimes);
+        a_vm->RegisterFunction("HowManyTimesWith", "TTLL_Store", HowManyTimesWith);
 
         a_vm->RegisterFunction("IncrementInt", "TTLL_Store", IncrementInt);
 
@@ -237,6 +322,14 @@ namespace LL_Papyrus {
         a_vm->RegisterFunction("GetAllLovers", "TTLL_Store", GetAllLovers);
 
         a_vm->RegisterFunction("GetLoverScore", "TTLL_Store", GetLoverScore);
+
+        a_vm->RegisterFunction("ClaimSexLabCheck", "TTLL_Store", ClaimSexLabCheck);
+        a_vm->RegisterFunction("AddHistoryToPartner", "TTLL_Store", AddHistoryToPartner);
+        a_vm->RegisterFunction("AddPastLover", "TTLL_Store", AddPastLover);
+
+        a_vm->RegisterFunction("DescribeFirstTimes", "TTLL_Store", DescribeFirstTimes);
+
+        a_vm->RegisterFunction("UuidToDecimal", "TTLL_Store", UuidToDecimal);
 
         return true;
     }

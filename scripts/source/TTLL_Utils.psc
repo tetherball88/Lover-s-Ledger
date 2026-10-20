@@ -21,3 +21,11 @@ Function SendThreadDataEvent(int ThreadID) global
         Utility.Wait(0.1)
     endif
 EndFunction
+
+;/**
+  * Records one internal climax: npc did it to target, target got it from npc.
+*/;
+Function RecordInternalClimax(Actor npc, Actor target) global
+    TTLL_Store.SetLoverInt(npc, target, "internalClimax.did", TTLL_Store.GetLoverInt(npc, target, "internalClimax.did") + 1)
+    TTLL_Store.SetLoverInt(target, npc, "internalClimax.got", TTLL_Store.GetLoverInt(target, npc, "internalClimax.got") + 1)
+EndFunction

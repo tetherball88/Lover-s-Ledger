@@ -24,6 +24,7 @@ This README is a concise reference for what the mod actually implements, how to 
     - `TTLL_Store` (core API): get/set generic properties, record actions, query lovers/actions/score
     - `TTLL_ThreadsCollector` (runtime API): thread lifecycle, actor properties, excitement contributions
     - `TTLL_MainController`, `TTLL_OstimIntegration`: Papyrus-side glue that listens for OStim events and applies thread data to the ledger
+    - `TTLL_SexlabIntegration`: the same for SexLab (AE and P+). SexLab acts are mapped to OStim action names, so counts merge. SexLab threads use collector ids `-1` to `-15` (see `Papyrus_API_Keys.md`). P+-only calls live in `TTLL_SexlabPPlus` (`scripts/source_pplus`, built against the P+ sources; `scripts/source_headers` holds the stub the main scripts compile against)
     - `GetAllNPCs()` and `GetAllLovers()` now return `Form[]` (TESNPC base forms) instead of `Actor[]`
 
 - Relationship seeding (built-in, no external plugin required)
@@ -59,11 +60,14 @@ This README is a concise reference for what the mod actually implements, how to 
   - SetLoverFlt(Actor npc, Actor lover, String propName, Float value)
   - RecordAction(Actor npc, String actionName, Bool isDid)
   - GetAllActions(Actor npc, Bool isDid, Int topK = -1) -> String[]
-  - GetActionCount(Actor npc, Bool isDid, String actionName) -> Int
+  - GetActionCount(Actor npc, Bool isDid, String actionName) -> Int (actions are stored under each synonym cluster's first word in `SKSE/Plugins/LoversLedger/synonyms.json`, and actionName / HowManyTimes actionType are mapped to it, e.g. "analsex" and "ass" both read "anal"; names outside any cluster are kept as OStim or SexLab recorded them, so check with GetAllActions(npc, true))
+  - HowManyTimes(Race akRace = None, Int gender = -1, String actionType = "", String direction = "any") -> Int (global: scenes where any participant matching race/gender gave/received the act; None / -1 / "" = any; direction "any", "gave" or "received")
+  - HowManyTimesWith(Int numActors = 0) -> Int (global: scenes with exactly numActors participants; <= 0 = all scenes)
   - IncrementInt(Actor npc, String intName)
   - GetAllNPCs() -> **Form[]** (returns TESNPC base forms; cast to `ActorBase` for name/gender, `Actor` may be None if cell is unloaded)
   - GetAllLovers(Actor npc, Int topK = -1) -> **Form[]** (same as above)
   - GetLoverScore(Actor npc, Actor lover) -> Float
+  - DescribeFirstTimes(Actor[] positions, String tags, Int[] slTotal, Int[] slVaginal, Int[] slAnal, Int[] anatomy) -> String (one line per unique position whose scene is a first: first sex, or one sentence with each new partner gender (man / woman / intersex partner) / race / group size; anatomy is SexLab's 1 penis + 2 vagina per position, so gender faction overrides, P+ futas and SkyrimNet_SexLab intersex picks (StorageUtil `SkyrimNet_SexLab_ChosenSex` = 2, on AE too) count, -1 = base sex; plus first vaginal / anal given or received; position 0 receives `Vaginal` / `Anal` tags; "" when nothing is new. SexLab callers use `TTLL_SexlabIntegration.GetFirstTimes(Actor[] positions, String tags)`, which fills the SexLab counts and anatomy. The SkyrimNet dashboard setting "Add virgin blood to first sexual encounter" (`config/plugins/LoversLedger`, off by default) adds a sore / bleeding line to first received vaginal / anal)
 
 **TTLL_ThreadsCollector** (global functions registered in Papyrus)
   - CleanThread(Int ThreadID)
@@ -99,7 +103,7 @@ Notes on property paths: several functions accept dot-separated property paths (
   - SKSE (matching game version)
   - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
-  - SexLab (optional — the project includes a stub `TTLL_SexlabIntegration.psc` for custom integration)
+  - SexLab AE or SexLab P+ (optional — records SexLab scenes into the same ledger fields as OStim). SexLab keeps counting its own scenes; each OStim scene adds 1 to SexLab's sex counters (total or masturbation, vaginal, anal, oral) for each participant, so SexLab's stats include OStim encounters. The first time the ledger sees an actor in a scene, SexLab counts it lacks (pre-install or SexLab-seeded history) are copied in: to the actor's spouse, lover or courting partner when the game has one, else to a stand-in past lover whose race and gender the SkyrimNet decision model picks (`prompts/decisions/loversledger/past_lover.prompt`; own race and opposite gender without SkyrimNet). Past lovers are not actors; the `ttll_get_npc_lovers` decorator lists them Counting SkyrimNet_SexLab OrgasmEngine orgasms needs a SkyrimNet_SexLab build that has `IsEngineDisabled`
   - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v0.25.0+ (optional) — enables NPC bio decorators for AI-driven dialogue
 
 ## Installation
@@ -112,7 +116,7 @@ Notes on property paths: several functions accept dot-separated property paths (
 
   - If ledger entries aren't appearing:
     - Check `LoversLedger.log` in the SKSE log folder for errors/warnings
-    - Verify `ApplyThreadToLedger` is called on thread end (OStim integration calls this automatically when `hadSex` is true)
+    - Verify `ApplyThreadToLedger` is called on thread end (OStim and SexLab integrations call this automatically when `hadSex` is true)
 
 ## Developer notes
 

@@ -54,6 +54,18 @@ Actor[] Function GetActors(int ThreadID) global native
 Function ExcitementContributorOrgasm(int ThreadID, Actor npc) global native
 
 ;/**
+ * Credits one orgasm of npc to existing contributors by the passed weights instead of accrued excitement.
+ * Lovers that are not already contributors are ignored. Resets every contributor's accrued total.
+ * Does nothing when the weights sum to 0 or less.
+ *
+ * @param {int} ThreadID - The ID of the thread
+ * @param {Actor} npc - The actor who orgasmed
+ * @param {Actor[]} lovers - Lovers to credit
+ * @param {float[]} weights - Weight per lover, same order as lovers
+*/;
+Function ExcitementContributorOrgasmWeighted(int ThreadID, Actor npc, Actor[] lovers, float[] weights) global native
+
+;/**
  * Updates the excitement contribution rate for a lover.
  * This function:
  * - Calculates time delta since last update
