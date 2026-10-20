@@ -6,29 +6,9 @@
 #include "LoversLedgerService.h"
 #include "UniqueOverrides.h"
 
-// Forward-declare only the pointer we use from SkyrimNetPublicAPI.h (C linkage, as in the header).
-extern "C" {
-    extern std::string (*PublicGetPluginConfigValue)(const char* pluginName, const char* path,
-                                                     const char* defaultValue);
-}
-
 namespace LL {
 
     namespace {
-
-        // SkyrimNet dashboard: SKSE/Plugins/SkyrimNet/config/plugins/LoversLedger/manifest.yaml
-        bool VirginBloodEnabled() {
-#ifdef _DEBUG
-            return false;  // the debug CRT must not take a std::string from SkyrimNet
-#else
-            if (!PublicGetPluginConfigValue) return false;
-            std::string value =
-                PublicGetPluginConfigValue("LoversLedger", "loversledger.first_time.virgin_blood", "false");
-            std::transform(value.begin(), value.end(), value.begin(),
-                           [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            return value == "true" || value == "1" || value == "yes";
-#endif
-        }
 
         std::string Lower(std::string_view str) {
             std::string out(str);
@@ -153,7 +133,6 @@ namespace LL {
         }
         if (givers.empty()) givers.push_back(1);
 
-        const bool blood = VirginBloodEnabled();
         auto& ledger = LoversLedgerService::GetSingleton();
         std::vector<std::string> lines;
 
@@ -176,14 +155,9 @@ namespace LL {
                                          !vaginalUnknown;
             const bool firstAnalDid = analScene && isGiver && history.analDid == 0 && !analUnknown;
 
-            const std::string vaginaBlood = name + "'s vagina is a little sore and is bleeding.";
-            const std::string assBlood = name + "'s asshole is a little sore and is bleeding.";
-
             std::vector<std::string> sentences;
             if (std::max(history.partnered, pos.slTotal) == 0) {
                 sentences.push_back("This is the first time " + name + " has had sex.");
-                if (blood && firstVaginalGot) sentences.push_back(vaginaBlood);
-                if (blood && firstAnalGot) sentences.push_back(assBlood);
             } else {
                 // SexLab history the ledger never attributed: its partners are unknown
                 if (pos.slTotal <= history.partnered) {
@@ -195,11 +169,9 @@ namespace LL {
                 }
                 if (firstVaginalGot) {
                     sentences.push_back("This is the first time " + name + " has had vaginal sex.");
-                    if (blood) sentences.push_back(vaginaBlood);
                 }
                 if (firstAnalGot) {
                     sentences.push_back("This is the first time " + name + " has received anal sex.");
-                    if (blood) sentences.push_back(assBlood);
                 }
                 if (firstVaginalDid) {
                     sentences.push_back("This is the first time " + name + " has had vaginal sex.");

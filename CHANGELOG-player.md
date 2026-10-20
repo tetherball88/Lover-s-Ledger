@@ -25,7 +25,6 @@ Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, 
 ### First-time lines
 - SexLab scenes can note a character's first times (first sex, first partner of a new race or gender, first threesome, and so on)
 - Intersex characters (picked in SkyrimNet_SexLab Actor Info) count as intersex on SexLab AE too, not as the opposite sex; first-time lines say "an intersex partner"
-- New SkyrimNet dashboard setting "Add virgin blood to first sexual encounter" (off by default)
 
 ### Bug fixes
 - Fixed: loading a save during a scene could leave old scene data behind
