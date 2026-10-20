@@ -104,9 +104,19 @@ namespace LL_Papyrus {
         if (!id) { SKSE::log::trace("SetLoverInt: skipping non-unique NPC 0x{:X}", npc->GetFormID()); return; }
         auto lid = UniqueBaseID(lover);
         if (!lid) {
-            SKSE::log::trace("SetLoverInt: non-unique lover 0x{:X}, bumping othersCount for NPC base 0x{:X}",
-                             lover->GetFormID(), *id);
-            LL::LoversLedgerService::GetSingleton().UpdateOthers(*id);
+            std::string prop = propName.data() ? propName.data() : "";
+            for (char& c : prop) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            if (prop == "internalclimax.did") {
+                LL::LoversLedgerService::GetSingleton().UpdateInternalClimax(*id, 0, "did");
+            } else if (prop == "internalclimax.got") {
+                LL::LoversLedgerService::GetSingleton().UpdateInternalClimax(*id, 0, "got");
+            } else {
+                SKSE::log::trace("SetLoverInt: non-unique lover 0x{:X}, bumping othersCount for NPC base 0x{:X}",
+                                 lover->GetFormID(), *id);
+                LL::LoversLedgerService::GetSingleton().UpdateOthers(*id);
+            }
             return;
         }
         SKSE::log::trace("SetLoverInt: npc base=0x{:X}, lover base=0x{:X}, prop={}, value={}",

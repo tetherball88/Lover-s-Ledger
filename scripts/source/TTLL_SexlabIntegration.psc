@@ -2,9 +2,11 @@ scriptname TTLL_SexlabIntegration
 
 ; SexLab (AE and P+) feeder for TTLL_ThreadsCollector.
 ; SexLab tids 0-14 are stored under ThreadsCollector key -1 - tid (-1..-15) so they never collide with OStim ids.
-; Event handlers and the ChangeActors restart flags live on TTLL_MainController.
 ;
-; Per-tid StorageUtil lists (on None, prefix TTLL_SL_):
+; Per-tid StorageUtil lists and flags (on None, prefix TTLL_SL_):
+;   RST_ (int)      : 1 while ChangeActors is in progress on this tid
+;   SAW_ (int)      : 1 when P+ ChangeActors sent AnimationEnd and ActorChangeEnd was not seen yet
+;   EAT_ (float)    : real time of that AnimationEnd, for the fallback apply
 ;   TG_/TR_/TT_/TX_ : current stage acts (giver, receiver, action type, receiver rate)
 ;   EA_/EL_/ER_     : excitement pairs rated this stage (stimulated actor, lover, rate)
 ;   PA_/PL_         : excitement pairs rated last stage
@@ -16,11 +18,45 @@ int Function Key(int tid) global
     return -1 - tid
 EndFunction
 
+bool Function IsValidTid(int tid) global
+    return tid >= 0 && tid < 15
+EndFunction
+
+SexLabFramework Function GetSLF() global
+    return Game.GetFormFromFile(0xD62, "SexLab.esm") as SexLabFramework
+EndFunction
+
 bool Function IsPPlus() global
     return SKSE.GetPluginVersion("SexLabUtil") > 20000
 EndFunction
 
-Function Maintenance(TTLL_MainController mainController, SexLabFramework slf) global
+; Seconds to wait for a P+ ChangeActors restart before applying the ended thread
+float Function RestartFallback() global
+    return 5.0
+EndFunction
+
+; Seconds between enjoyment samples while an engine scene runs
+float Function EnjoymentPoll() global
+    return 1.0
+EndFunction
+
+; RegisterForSingleUpdate replaces the pending update; never push an engine scene's poll back
+Function ArmUpdate(TTLL_MainController mainController, float seconds) global
+    if !mainController
+        return
+    endif
+    if seconds > EnjoymentPoll() && AnyEngineLatched()
+        seconds = EnjoymentPoll()
+    endif
+    mainController.RegisterForSingleUpdate(seconds)
+EndFunction
+
+Function Maintenance(TTLL_MainController mainController) global
+    SexLabFramework slf = GetSLF()
+    if !slf
+        return
+    endif
+
     mainController.UnregisterForModEvent("HookAnimationStarting")
     mainController.RegisterForModEvent("HookAnimationStarting", "SLAnimationStarting")
     mainController.UnregisterForModEvent("HookAnimationStart")
@@ -29,6 +65,8 @@ Function Maintenance(TTLL_MainController mainController, SexLabFramework slf) gl
     mainController.RegisterForModEvent("HookStageStart", "SLStageStart")
     mainController.UnregisterForModEvent("HookAnimationChange")
     mainController.RegisterForModEvent("HookAnimationChange", "SLAnimationChange")
+    mainController.UnregisterForModEvent("HookPositionChange")
+    mainController.RegisterForModEvent("HookPositionChange", "SLPositionChange")
     mainController.UnregisterForModEvent("HookActorChangeStart")
     mainController.RegisterForModEvent("HookActorChangeStart", "SLActorChangeStart")
     mainController.UnregisterForModEvent("HookActorChangeEnd")
@@ -42,8 +80,179 @@ Function Maintenance(TTLL_MainController mainController, SexLabFramework slf) gl
     mainController.UnregisterForModEvent("SkyrimNet_SexLab_Orgasm")
     mainController.RegisterForModEvent("SkyrimNet_SexLab_Orgasm", "SLNetOrgasm")
 
-    ; Collector data is runtime only; the next StageStart rebuilds the lists
+    ; Collector data and restart state are runtime only; the next StageStart rebuilds the lists
     StorageUtil.ClearAllPrefix("TTLL_SL_")
+    ResumePastLovers(mainController)
+EndFunction
+
+; ========================================================================================
+; Event handlers (delegated from TTLL_MainController)
+; ========================================================================================
+
+Function OnAnimationStarting(TTLL_MainController mainController, int tid) global
+    if !IsValidTid(tid) || !GetSLF()
+        return
+    endif
+    ; A P+ ChangeActors restart re-sends AnimationStarting; keep the encounter
+    if StorageUtil.GetIntValue(none, "TTLL_SL_RST_" + tid) != 1
+        StartThread(tid)
+        if IsEngineLatched(tid)
+            ArmUpdate(mainController, EnjoymentPoll())
+        endif
+    endif
+EndFunction
+
+Function OnAnimationStart(TTLL_MainController mainController, int tid) global
+    if !IsValidTid(tid)
+        return
+    endif
+    SexLabFramework slf = GetSLF()
+    if !slf
+        return
+    endif
+    ProcessStage(slf, tid)
+    StorageUtil.UnsetIntValue(none, "TTLL_SL_RST_" + tid)
+    StorageUtil.UnsetIntValue(none, "TTLL_SL_SAW_" + tid)
+    StorageUtil.UnsetFloatValue(none, "TTLL_SL_EAT_" + tid)
+    sslThreadController thread = slf.GetController(tid)
+    if thread
+        CheckThreadHistoryWithSLF(mainController, slf, thread.Positions)
+    endif
+EndFunction
+
+Function OnStageStart(int tid) global
+    if !IsValidTid(tid)
+        return
+    endif
+    SexLabFramework slf = GetSLF()
+    if slf
+        ProcessStage(slf, tid)
+    endif
+EndFunction
+
+Function OnAnimationChange(int tid) global
+    OnStageStart(tid)
+EndFunction
+
+Function OnPositionChange(int tid) global
+    OnStageStart(tid)
+EndFunction
+
+Function OnActorChangeStart(int tid) global
+    if IsValidTid(tid) && GetSLF()
+        StorageUtil.SetIntValue(none, "TTLL_SL_RST_" + tid, 1)
+    endif
+EndFunction
+
+Function OnActorChangeEnd(TTLL_MainController mainController, int tid) global
+    if !IsValidTid(tid)
+        return
+    endif
+    SexLabFramework slf = GetSLF()
+    if !slf
+        return
+    endif
+    if StorageUtil.GetIntValue(none, "TTLL_SL_SAW_" + tid) == 1
+        ; P+: the restart is confirmed; AnimationStarting / AnimationStart are still to come
+        StorageUtil.UnsetIntValue(none, "TTLL_SL_SAW_" + tid)
+        StorageUtil.UnsetFloatValue(none, "TTLL_SL_EAT_" + tid)
+    else
+        ; AE: same thread, nothing ended; refresh stage and history for updated positions
+        StorageUtil.UnsetIntValue(none, "TTLL_SL_RST_" + tid)
+        ProcessStage(slf, tid)
+        sslThreadController thread = slf.GetController(tid)
+        if thread
+            CheckThreadHistoryWithSLF(mainController, slf, thread.Positions)
+        endif
+    endif
+EndFunction
+
+Function OnAnimationEnd(TTLL_MainController mainController, int tid) global
+    if !IsValidTid(tid) || !GetSLF()
+        return
+    endif
+    if StorageUtil.GetIntValue(none, "TTLL_SL_RST_" + tid) == 1
+        ; P+ ChangeActors: hold the apply. If ActorChangeEnd never comes the restart failed; OnUpdate applies.
+        StorageUtil.SetIntValue(none, "TTLL_SL_SAW_" + tid, 1)
+        StorageUtil.SetFloatValue(none, "TTLL_SL_EAT_" + tid, Utility.GetCurrentRealTime())
+        ArmUpdate(mainController, RestartFallback())
+    else
+        FinishThread(mainController, tid)
+    endif
+EndFunction
+
+Function FinishThread(TTLL_MainController mainController, int tid) global
+    StorageUtil.UnsetIntValue(none, "TTLL_SL_RST_" + tid)
+    StorageUtil.UnsetIntValue(none, "TTLL_SL_SAW_" + tid)
+    StorageUtil.UnsetFloatValue(none, "TTLL_SL_EAT_" + tid)
+    OnEnd(tid)
+    ArmUpdate(mainController, 3.0)
+EndFunction
+
+Function OnSexLabOrgasm(Actor npc) global
+    SexLabFramework slf = GetSLF()
+    if !slf || !npc
+        return
+    endif
+    ; Engine scenes count SkyrimNet_SexLab_Orgasm instead
+    if EngineOwns(slf, npc)
+        return
+    endif
+    OnOrgasm(slf, npc)
+EndFunction
+
+Function OnNetOrgasm(Actor npc) global
+    SexLabFramework slf = GetSLF()
+    if !slf || !npc
+        return
+    endif
+    if !EngineOwns(slf, npc)
+        return
+    endif
+    OnOrgasm(slf, npc)
+EndFunction
+
+Function OnPastLoverDecision(TTLL_MainController mainController, String answer, String resultJson, int success) global
+    string gender = ""
+    if success == 1
+        gender = SkyrimNetApi.GetJsonString(resultJson, "gender", "")
+    else
+        answer = ""
+    endif
+    FinishPastLover(mainController, answer, gender)
+EndFunction
+
+; Applies a P+ thread whose ChangeActors restart never confirmed. Returns seconds until the next pending one (0 = none).
+float Function CheckRestartFallback(TTLL_MainController mainController) global
+    float now = Utility.GetCurrentRealTime()
+    float nextWait = 0.0
+    int i = 0
+    while i < 15
+        if StorageUtil.GetIntValue(none, "TTLL_SL_SAW_" + i) == 1
+            float endAt = StorageUtil.GetFloatValue(none, "TTLL_SL_EAT_" + i)
+            float remaining = RestartFallback() - (now - endAt)
+            if remaining <= 0.0
+                FinishThread(mainController, i)
+            elseif nextWait == 0.0 || remaining < nextWait
+                nextWait = remaining
+            endif
+        endif
+        i += 1
+    endwhile
+    return nextWait
+EndFunction
+
+Function OnUpdate(TTLL_MainController mainController) global
+    float nextWait = CheckRestartFallback(mainController)
+    SampleEnjoyment()
+    if AnyEngineLatched()
+        if nextWait <= 0.0 || nextWait > EnjoymentPoll()
+            nextWait = EnjoymentPoll()
+        endif
+    endif
+    if nextWait > 0.0 && mainController
+        mainController.RegisterForSingleUpdate(nextWait)
+    endif
 EndFunction
 
 ; ========================================================================================
@@ -235,7 +444,7 @@ Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Ac
         bool blowjob = HasTag(thread, pplus, "Blowjob")
         bool cunnilingus = HasTag(thread, pplus, "Cunnilingus")
         if blowjob
-            AddAct(tid, receiver, partner, "blowjob", 0.8)
+            AddBlowjobActs(slf, tid, positions, pplus)
         endif
         if cunnilingus
             ; 3+ positions: a vagina at 1+ is licked by another position 1+ that is not penetrating position 0
@@ -264,8 +473,8 @@ Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Ac
             endif
         endif
         if !blowjob && !cunnilingus && HasTag(thread, pplus, "Oral")
-            if HasPenis(slf, partner, pplus)
-                AddAct(tid, receiver, partner, "blowjob", 0.8)
+            if AnyPositionHasPenis(slf, positions, pplus)
+                AddBlowjobActs(slf, tid, positions, pplus)
             else
                 AddAct(tid, partner, receiver, "cunnilingus", 0.8)
             endif
@@ -299,6 +508,32 @@ Function AddTagActs(SexLabFramework slf, sslThreadController thread, int tid, Ac
     endif
 EndFunction
 
+bool Function AnyPositionHasPenis(SexLabFramework slf, Actor[] positions, bool pplus) global
+    int i = 1
+    while i < positions.Length
+        if HasPenis(slf, positions[i], pplus)
+            return true
+        endif
+        i += 1
+    endwhile
+    return false
+EndFunction
+
+Function AddBlowjobActs(SexLabFramework slf, int tid, Actor[] positions, bool pplus) global
+    bool found = false
+    int i = 1
+    while i < positions.Length
+        if HasPenis(slf, positions[i], pplus)
+            AddAct(tid, positions[0], positions[i], "blowjob", 0.8)
+            found = true
+        endif
+        i += 1
+    endwhile
+    if !found
+        AddAct(tid, positions[0], positions[1], "blowjob", 0.8)
+    endif
+EndFunction
+
 ; Positions 1+ wearing a strap-on penetrate position 0; else those with a penis; with none, position 1 does
 Function AddPenetrationActs(SexLabFramework slf, sslThreadController thread, int tid, Actor[] positions, string penetration, bool pplus) global
     bool found = false
@@ -310,14 +545,16 @@ Function AddPenetrationActs(SexLabFramework slf, sslThreadController thread, int
         endif
         i += 1
     endwhile
-    i = 1
-    while !found && i < positions.Length
-        if HasPenis(slf, positions[i], pplus)
-            AddAct(tid, positions[i], positions[0], penetration, 1.0)
-            found = true
-        endif
-        i += 1
-    endwhile
+    if !found
+        i = 1
+        while i < positions.Length
+            if HasPenis(slf, positions[i], pplus)
+                AddAct(tid, positions[i], positions[0], penetration, 1.0)
+                found = true
+            endif
+            i += 1
+        endwhile
+    endif
     if !found
         AddAct(tid, positions[1], positions[0], penetration, 1.0)
     endif
@@ -328,13 +565,13 @@ Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, boo
     MoveExcitementToPrevious(tid)
 
     int count = StorageUtil.FormListCount(none, "TTLL_SL_TG_" + tid)
+    Actor[] positions = thread.Positions
     int i = 0
     if count > 0
         TTLL_ThreadsCollector.SetThreadBool(threadKey, "hadSex", true)
         TTLL_ThreadsCollector.SetThreadStr(threadKey, "lastSexualSceneId", SceneId(thread, pplus))
         ; Positions are participants even without an act (2-position tag acts in a 3-way): the actor count decides exclusive / group.
         ; Setting anatomy creates the actor and gives first-time partner traits SexLab's gender (override, futa).
-        Actor[] positions = thread.Positions
         while i < positions.Length
             TTLL_ThreadsCollector.SetActorInt(threadKey, positions[i], "anatomy", Anatomy(slf, positions[i], pplus))
             i += 1
@@ -363,6 +600,22 @@ Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, boo
         endif
         i += 1
     endwhile
+
+    if count > 0 && positions.Length > 1
+        ; Ensure every participant in a 3+ position scene has at least a 0-rate contributor entry with position 0
+        i = 1
+        while i < positions.Length
+            if positions[i] && positions[0] && positions[i] != positions[0]
+                if FindPair("TTLL_SL_EA_", "TTLL_SL_EL_", tid, positions[i], positions[0]) < 0
+                    AddExcitement(tid, positions[i], positions[0], 0.0)
+                endif
+                if FindPair("TTLL_SL_EA_", "TTLL_SL_EL_", tid, positions[0], positions[i]) < 0
+                    AddExcitement(tid, positions[0], positions[i], 0.0)
+                endif
+            endif
+            i += 1
+        endwhile
+    endif
 
     ApplyExcitement(tid)
 EndFunction
@@ -703,7 +956,11 @@ EndFunction
 ; Never overwrites: SexLab holds history the ledger does not (pre-install, unmapped scenes).
 ; ========================================================================================
 
-Function AddOStimStats(SexLabFramework slf, int threadID) global
+Function AddOStimStats(int threadID) global
+    SexLabFramework slf = GetSLF()
+    if !slf && !IsPPlus()
+        return
+    endif
     if !TTLL_ThreadsCollector.GetThreadBool(threadID, "hadSex")
         return
     endif
@@ -723,7 +980,7 @@ Function AddOStimStats(SexLabFramework slf, int threadID) global
                 || HadAction(threadID, npc, "lickingvagina") || HadAction(threadID, npc, "lickingtesticles")) as int
             if pplus
                 TTLL_SexlabPPlus.AddCounts(npc, total, solo, vaginal, anal, oral)
-            else
+            elseif slf
                 AdjustAE(slf, npc, "SexCount", total)
                 AdjustAE(slf, npc, "Masturbation", solo)
                 AdjustAE(slf, npc, "VaginalCount", vaginal)
@@ -794,7 +1051,15 @@ int Function Anatomy(SexLabFramework slf, Actor npc, bool pplus) global
     return bits
 EndFunction
 
-Function CheckThreadHistory(TTLL_MainController mainController, SexLabFramework slf, Actor[] actors) global
+Function CheckThreadHistory(TTLL_MainController mainController, Actor[] actors) global
+    SexLabFramework slf = GetSLF()
+    if !slf && !IsPPlus()
+        return
+    endif
+    CheckThreadHistoryWithSLF(mainController, slf, actors)
+EndFunction
+
+Function CheckThreadHistoryWithSLF(TTLL_MainController mainController, SexLabFramework slf, Actor[] actors) global
     int i = 0
     while i < actors.Length
         CheckHistory(mainController, slf, actors[i])
@@ -818,7 +1083,7 @@ Function CheckHistory(TTLL_MainController mainController, SexLabFramework slf, A
         vaginal = TTLL_SexlabPPlus.GetCount(npc, 10)
         anal = TTLL_SexlabPPlus.GetCount(npc, 11)
         oral = TTLL_SexlabPPlus.GetCount(npc, 9)
-    else
+    elseif slf
         total = slf.Stats.GetSkill(npc, "SexCount")
         solo = slf.Stats.GetSkill(npc, "Masturbation")
         vaginal = slf.Stats.GetSkill(npc, "VaginalCount")
@@ -837,6 +1102,10 @@ Function CheckHistory(TTLL_MainController mainController, SexLabFramework slf, A
         return
     endif
     if TTLL_Store.AddHistoryToPartner(npc, total, solo, vaginal, anal, oral)
+        return
+    endif
+    if total == 0
+        TTLL_Store.AddPastLover(npc, npc.GetRace(), 1 - npc.GetActorBase().GetSex(), 0, solo, vaginal, anal, oral)
         return
     endif
     StorageUtil.FormListAdd(none, "TTLL_PL_A", npc)
@@ -991,11 +1260,8 @@ bool Function HasPenis(SexLabFramework slf, Actor npc, bool pplus) global
     return gender == 0 || gender == 2
 EndFunction
 
-; AE equips a strap-on on female positions; P+ models this through GetSex (futa) instead
+; True when a position is using a strap-on in the current thread (both AE and P+ set _useStrapon on sslActorAlias)
 bool Function UsesStrapon(sslThreadController thread, Actor npc, bool pplus) global
-    if pplus
-        return false
-    endif
     sslActorAlias slot = thread.ActorAlias(npc)
     return slot && slot.IsUsingStrapon()
 EndFunction

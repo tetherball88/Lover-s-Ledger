@@ -17,6 +17,10 @@ Function OStimStart(int ThreadID) global
     TTLL_ThreadsCollector.CleanThread(ThreadID)
 EndFunction
 
+Actor[] Function GetActors(int ThreadID) global
+    return OThread.GetActors(ThreadID)
+EndFunction
+
 Function OStimSceneChanged(int ThreadID) global
     Actor[] actors = OThread.GetActors(ThreadID)
     int i = 0
