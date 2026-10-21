@@ -34,7 +34,6 @@ Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, 
 - **`TTLL_Store.DescribeFirstTimes(Actor[] positions, String tags, Int[] slTotal, Int[] slVaginal, Int[] slAnal, Int[] anatomy)`**: one line per unique position whose scene is a first (first sex; new partner gender, race or group size; first vaginal / anal given or received), `""` when nothing is new. Call it before the scene ends.
 - SexLab callers use **`TTLL_SexlabIntegration.GetFirstTimes(Actor[] positions, String tags)`**, which fills the SexLab counts and anatomy.
 - On SexLab AE, StorageUtil int `SkyrimNet_SexLab_ChosenSex` = 2 on an actor (SkyrimNet_SexLab Actor Info intersex pick) gives anatomy 3 (penis + vagina) in every SexLab check, as P+ futa does. The partner gender for anatomy 3 reads "an intersex partner".
-- SkyrimNet dashboard setting "Add virgin blood to first sexual encounter" (`config/plugins/LoversLedger`, off by default) adds a sore / bleeding line to a first received vaginal / anal. SkyrimNet plugin version 1.0.3.
 - New co-save record `LLPT`.
 
 ### Bug fixes

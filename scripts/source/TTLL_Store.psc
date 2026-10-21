@@ -157,8 +157,7 @@ Function AddPastLover(Actor npc, Race akRace, Int gender, Int encounters, Int so
 ; slTotal / slVaginal / slAnal: each position's SexLab counts, so history not yet in the ledger is not taken as a first.
 ; anatomy: each position's SexLab anatomy, 1 penis + 2 vagina (gender faction override, P+ futa or a SkyrimNet_SexLab intersex pick = 3); -1 = base sex.
 ; It decides who receives / penetrates and "with a man / a woman / an intersex partner".
-; With "Add virgin blood to first sexual encounter" on (SkyrimNet dashboard), first received vaginal / anal adds a
-; sore and bleeding line. Call it before the scene ends (the ledger counts the scene at AnimationEnd).
+; Call it before the scene ends (the ledger counts the scene at AnimationEnd).
 ; SexLab callers: TTLL_SexlabIntegration.GetFirstTimes(positions, tags) fills the counts.
 String Function DescribeFirstTimes(Actor[] positions, String tags, Int[] slTotal, Int[] slVaginal, Int[] slAnal, Int[] anatomy) Global Native
 

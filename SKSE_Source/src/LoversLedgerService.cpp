@@ -876,46 +876,28 @@ namespace LL {
             return;
         }
 
-        bool needsRecalc = false;
-
         // Single property names
         if (parts.size() == 1) {
-            static const std::unordered_map<std::string, std::function<void(LoverData&, int)>> intSetters = {
-                {"exclusivesex", [](LoverData& l, int v) { l.exclusiveSex = v; }},
-                {"partofsamegroupsex", [](LoverData& l, int v) { l.partOfSameGroupSex = v; }}};
-
-            auto it = intSetters.find(parts[0]);
-            if (it != intSetters.end()) {
-                it->second(lover, value);
-                needsRecalc = true;
+            if (parts[0] == "exclusivesex") {
+                npc.exclusiveSex = std::max(0, npc.exclusiveSex + (value - lover.exclusiveSex));
+                lover.exclusiveSex = value;
+            } else if (parts[0] == "partofsamegroupsex") {
+                npc.groupSex = std::max(0, npc.groupSex + (value - lover.partOfSameGroupSex));
+                lover.partOfSameGroupSex = value;
             }
+            return;
         }
 
         // Nested properties
         if (parts.size() == 2 && parts[0] == "internalclimax") {
             if (parts[1] == "did") {
+                npc.totalInternalClimax.did =
+                    std::max(0, npc.totalInternalClimax.did + (value - lover.internalClimax.did));
                 lover.internalClimax.did = value;
-                needsRecalc = true;
             } else if (parts[1] == "got") {
+                npc.totalInternalClimax.got =
+                    std::max(0, npc.totalInternalClimax.got + (value - lover.internalClimax.got));
                 lover.internalClimax.got = value;
-                needsRecalc = true;
-            }
-        }
-
-        // Recalculate NPC totals from all lovers
-        if (needsRecalc) {
-            npc.exclusiveSex = 0;
-            npc.groupSex = 0;
-            npc.totalInternalClimax.did = 0;
-            npc.totalInternalClimax.got = 0;
-            npc.lastTime = 0.0f;
-
-            for (const auto& [loverID, loverData] : npc.lovers) {
-                npc.exclusiveSex += loverData.exclusiveSex;
-                npc.groupSex += loverData.partOfSameGroupSex;
-                npc.totalInternalClimax.did += loverData.internalClimax.did;
-                npc.totalInternalClimax.got += loverData.internalClimax.got;
-                npc.lastTime = std::max(npc.lastTime, loverData.lastTime);
             }
         }
     }
@@ -1861,6 +1843,9 @@ namespace LL {
         if (const auto* npc = FindNPC(npcFormID)) {
             partnered = npc->exclusiveSex + npc->groupSex;
             for (const auto& [loverID, lover] : npc->lovers) {
+                if (lover.exclusiveSex + lover.partOfSameGroupSex <= 0) {
+                    continue;
+                }
                 auto* loverBase = RE::TESForm::LookupByID<RE::TESNPC>(loverID);
                 if (!loverBase) {
                     traits.unknownPartners = true;
