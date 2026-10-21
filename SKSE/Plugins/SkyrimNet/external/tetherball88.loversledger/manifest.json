@@ -3,7 +3,7 @@
   "type": "bundle",
   "title": "TT Lover's Ledger",
   "tagline": "Relationship and encounter statistics ledger for SkyrimNet character bios.",
-  "description": "Injects dynamic sexual behavior summaries and partner history into SkyrimNet character bios, powered by Lover's Ledger tracking data. First-time lines for SexLab scenes have a dashboard setting under config/plugins/LoversLedger (Add virgin blood to first sexual encounter).",
+  "description": "Injects dynamic sexual behavior summaries and partner history into SkyrimNet character bios, powered by Lover's Ledger tracking data.",
   "author": "tetherball88",
   "tags": [
     "lovers",
