@@ -602,7 +602,7 @@ Function ApplyActs(SexLabFramework slf, sslThreadController thread, int tid, boo
     endwhile
 
     if count > 0 && positions.Length > 1
-        ; Ensure every participant in a 3+ position scene has at least a 0-rate contributor entry with position 0
+        ; Positions 1+ with no act still pair with position 0 at rate 0 (both ways): every participant gets a lover row and the exclusive / group count
         i = 1
         while i < positions.Length
             if positions[i] && positions[0] && positions[i] != positions[0]
