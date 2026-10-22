@@ -1,12 +1,12 @@
 ## TT Lover's Ledger
 
-A lightweight SKSE plugin + Papyrus library that records adult-framework (OStim and basic SexLab) activity and exposes a programmatic ledger of relationship and encounter statistics.
+A lightweight SKSE plugin + Papyrus library that records adult-framework (**OStim** and, since **v1.2.0**, **SexLab AE / P+**) activity and exposes a programmatic ledger of relationship and encounter statistics.
 
 This README is a concise reference for what the mod actually implements, how to use it from Papyrus, and what it tracks.
 
 ## What this mod implements
 
-- Runtime thread collector for OStim scenes (non-persistent): `ThreadsCollector`
+- Runtime thread collector for OStim and SexLab (since v1.2.0) scenes (non-persistent): `ThreadsCollector`
     - Tracks per-thread actors, actions (did/got), orgasms, and excitement contribution data
     - Exposes getters/setters to Papyrus to read/write per-thread and per-actor properties
     - Provides ApplyThreadToLedger() to convert a finished thread into persistent ledger updates
@@ -24,7 +24,7 @@ This README is a concise reference for what the mod actually implements, how to 
     - `TTLL_Store` (core API): get/set generic properties, record actions, query lovers/actions/score
     - `TTLL_ThreadsCollector` (runtime API): thread lifecycle, actor properties, excitement contributions
     - `TTLL_MainController`, `TTLL_OstimIntegration`: Papyrus-side glue that listens for OStim events and applies thread data to the ledger
-    - `TTLL_SexlabIntegration`: the same for SexLab (AE and P+). SexLab acts are mapped to OStim action names, so counts merge. SexLab threads use collector ids `-1` to `-15` (see `Papyrus_API_Keys.md`). P+-only calls live in `TTLL_SexlabPPlus` (`scripts/source_pplus`, built against the P+ sources; `scripts/source_headers` holds the stub the main scripts compile against)
+    - `TTLL_SexlabIntegration` *(since v1.2.0)*: the same for SexLab (AE and P+). SexLab acts are mapped to OStim action names, so counts merge. SexLab threads use collector ids `-1` to `-15` (see `Papyrus_API_Keys.md`). P+-only calls live in `TTLL_SexlabPPlus` (`scripts/source_pplus`, built against the P+ sources; `scripts/source_headers` holds the stub the main scripts compile against)
     - `GetAllNPCs()` and `GetAllLovers()` now return `Form[]` (TESNPC base forms) instead of `Actor[]`
 
 - Relationship seeding (built-in, no external plugin required)
@@ -103,7 +103,7 @@ Notes on property paths: several functions accept dot-separated property paths (
   - SKSE (matching game version)
   - [SKSE Menu Framework](https://www.nexusmods.com/skyrimspecialedition/mods/120352)
   - OStim (for full OStim integration)
-  - SexLab AE or SexLab P+ (optional — records SexLab scenes into the same ledger fields as OStim). SexLab keeps counting its own scenes; each OStim scene adds 1 to SexLab's sex counters (total or masturbation, vaginal, anal, oral) for each participant, so SexLab's stats include OStim encounters. The first time the ledger sees an actor in a scene, SexLab counts it lacks (pre-install or SexLab-seeded history) are copied in: to the actor's spouse, lover or courting partner when the game has one, else to a stand-in past lover whose race and gender the SkyrimNet decision model picks (`prompts/decisions/loversledger/past_lover.prompt`; own race and opposite gender without SkyrimNet). Past lovers are not actors; the `ttll_get_npc_lovers` decorator lists them Counting SkyrimNet_SexLab OrgasmEngine orgasms needs a SkyrimNet_SexLab build that has `IsEngineDisabled`
+  - SexLab AE or SexLab P+ (optional, supported since **v1.2.0** — records SexLab scenes into the same ledger fields as OStim). SexLab keeps counting its own scenes; each OStim scene adds 1 to SexLab's sex counters (total or masturbation, vaginal, anal, oral) for each participant, so SexLab's stats include OStim encounters. The first time the ledger sees an actor in a scene, SexLab counts it lacks (pre-install or SexLab-seeded history) are copied in: to the actor's spouse, lover or courting partner when the game has one, else to a stand-in past lover whose race and gender the SkyrimNet decision model picks (`prompts/decisions/loversledger/past_lover.prompt`; own race and opposite gender without SkyrimNet). Past lovers are not actors; the `ttll_get_npc_lovers` decorator lists them. Counting SkyrimNet_SexLab OrgasmEngine orgasms needs a SkyrimNet_SexLab build that has `IsEngineDisabled`.
   - [SkyrimNet](https://www.nexusmods.com/skyrimspecialedition/mods/123453) v0.25.0+ (optional) — enables NPC bio decorators for AI-driven dialogue
 
 ## Installation
@@ -124,6 +124,9 @@ Notes on property paths: several functions accept dot-separated property paths (
   - The service provides public functions in C++ exposed to Papyrus; see `SKSE_Source/src` for the exact signatures and behavior.
 
 ## Changelog
+
+  - v1.2.0:
+    - **Full SexLab AE & P+ support**: `TTLL_SexlabIntegration` now records SexLab scenes into the same ledger fields as OStim (using collector thread IDs `-1` to `-15`), maps SexLab acts to OStim action names via `synonyms.json`, syncs OStim encounters into SexLab's counters, backfills pre-existing SexLab history on first sight (`LLPL`), tracks first-time milestones (`DescribeFirstTimes` / `LLPT`), and supports `SkyrimNet_SexLab` OrgasmEngine weighted orgasm attribution.
 
   - v1.0.2:
     - **SkyrimNet Beta 25+ external plugin migration**: Migrated prompt submodules from legacy loose file structure (`SKSE/Plugins/SkyrimNet/prompts/`) to external plugin bundle layout (`SKSE/Plugins/SkyrimNet/external/tetherball88.loversledger/`) with `manifest.json`.

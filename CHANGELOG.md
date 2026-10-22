@@ -1,12 +1,12 @@
 # Changelog
 
-https://github.com/tetherball88/Lover-s-Ledger/releases/tag/v1.1.0
+https://github.com/tetherball88/Lover-s-Ledger/releases/tag/v1.2.0
 
 Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, SkyrimNet 0.25.0+.
 
-## v0.1.1 (unreleased)
+## v1.2.0
 
-### SexLab support (untested)
+### SexLab support
 - **SexLab AE and P+ scenes are recorded**: `TTLL_SexlabIntegration` (was a placeholder) feeds `TTLL_ThreadsCollector` the same way `TTLL_OstimIntegration` does. SexLab threads use collector ids `-1` to `-15` (`-1 - tid`), so they never collide with OStim ids. SexLab acts are mapped to OStim action names, so counts from both frameworks merge.
 - Acts come from P+ collision interactions (`CTYPE`), with a stage-tag fallback, and from animation tags on AE. Excitement is rated per acting pair in both directions; only pairs that stopped are zeroed on a stage change.
 - Internal climax comes from AE cum data or a P+ vaginal interaction (`TTLL_Utils.RecordInternalClimax`).
@@ -19,7 +19,7 @@ Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, 
 - **OStim scenes count in SexLab stats**: `TTLL_SexlabIntegration.AddOStimStats` (AE) and `TTLL_SexlabPPlus.AddCounts` (P+) add +1 to each participant's SexLab sex / vaginal / anal / oral counters at OStim scene end.
 - `Papyrus_API_Keys.md`: thread id ranges; `otherscount` is not an `IncrementInt` key. README: SexLab notes and stats sync.
 
-### Orgasm attribution (untested)
+### Orgasm attribution
 - **Excitement credited to every partner in a burst**: `ThreadsCollector.h` adds `ExcitementContributor::lastUpdated` and drops the shared `ThreadData::prevExcitementStarted`. `UpdateExcitementRate` accrues each contributor from its own timestamp, so every pair updated in the same tick gets its elapsed time (before, only the first call did).
 - `ExcitementContributorOrgasm` flushes accrual up to now before splitting, splits evenly across active partners when nothing has accrued yet, and resets totals but keeps rates, so a second orgasm in the same scene is credited.
 - **SkyrimNet_SexLab OrgasmEngine**: when SkyrimNet_SexLab is installed and its engine is on at scene start, orgasms are counted from `SkyrimNet_SexLab_Orgasm` instead of `SexLabOrgasm`, and each lover's share is weighted by how much enjoyment rose during their acts. Without the mod, or with `engine_disabled`, the `SexLabOrgasm` path is unchanged.
@@ -35,7 +35,7 @@ Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, 
 - **Action-name synonyms**: new `SKSE/Plugins/LoversLedger/synonyms.json`, clusters copied from SkyrimNet_SexLab `synonyms-broad.json` plus ledger names (`analsex`, `vaginalsex`, `deepthroat`, `*masturbation`, `fingering`). The first member of a cluster is the stored word.
 - `LoversLedgerService::LoadSynonyms` runs at `kDataLoaded`; `Canonical()` maps recorded actions, scene keys and `GetActionCount` / `HowManyTimes` queries to the cluster word. Old saves are merged to cluster words on load. README documents both.
 
-### SexLab history backfill (untested)
+### SexLab history backfill
 - **SexLab stats copied in on first sight**: `TTLL_SexlabIntegration.CheckHistory` runs the first time an actor is in a scene (SexLab or OStim) and copies SexLab counts the ledger lacks (sex, masturbation, vaginal, anal, oral).
 - The counts go to the actor's game spouse / lover / courting partner (`AddHistoryToPartner`). With none, they go to a stand-in past lover whose race and gender the SkyrimNet decision model picks (`prompts/decisions/loversledger/past_lover.prompt`, `TTLL_MainController.OnPastLoverDecision`); fallback is own race, opposite gender.
 - SKSE natives `ClaimSexLabCheck`, `AddHistoryToPartner`, `AddPastLover`. The checked set and past lovers are saved in a new `LLPL` record (`LLGR` stays v2).
@@ -44,7 +44,7 @@ Requires SKSE, SKSE Menu Framework and OStim. Optional: SexLab AE or SexLab P+, 
 - `CheckHistory`: missing counts with no partnered sex (solo or act counts only) are filed straight away with `AddPastLover(..., encounters 0, ...)` instead of asking the decision model for a past lover.
 - **Past-lover decision never fired**: `decnpc` rejected the quoted hex `npc_uuid` in the decision context. New `TTLL_Store.UuidToDecimal`; `SendPastLover` sends `npc_uuid` as a JSON number.
 
-### First-time lines (untested)
+### First-time lines
 - **First-time sentence per scene**: new `SKSE_Source/src/FirstTimes.h/.cpp` builds one line per unique actor whose scene is a first: first sex, new partner gender / race / group size, and first vaginal / anal given or received.
 - `LoversLedgerService`: `PartnerTraits` / `FirstTimeHistory`, seeded from older data, saved as `LLPT`, cleared with the NPC. `ThreadsCollector` calls `RecordPartners` before the scene is applied.
 - `LoversLedgerService::SeedTraits` skips lover rows with no exclusive or group sex (e.g. internal climax only), so they do not seed partner race / gender.

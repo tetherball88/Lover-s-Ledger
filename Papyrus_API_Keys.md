@@ -72,12 +72,12 @@ Used with `RecordAction(Actor npc, String actionName, Bool isDid)`.
 
 ## Thread IDs
 
-`TTLL_ThreadsCollector` functions and the `ttll_thread_data_event` mod event use one thread id space for both frameworks:
+`TTLL_ThreadsCollector` functions and the `ttll_thread_data_event` mod event use one thread id space for both frameworks (SexLab supported since **v1.2.0**):
 
 | Range | Framework |
 | :--- | :--- |
 | `0` and above | OStim thread id (`0` is the player thread) |
-| `-1` to `-15` | SexLab thread, stored as `-1 - tid` (SexLab tid `0` is `-1`) |
+| `-1` to `-15` | SexLab thread (since v1.2.0), stored as `-1 - tid` (SexLab tid `0` is `-1`) |
 
 ## Return Type Notes
 
